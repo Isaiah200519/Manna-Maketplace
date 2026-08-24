@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Manna Marketplace Delivery • Partner Portal</title>
+    <meta name="description"
+        content="Delivery partner portal for managing pickups, routes, and customer support through Manna Marketplace." />
+    <link rel="shortcut icon" href="./favicon.ico" type="image/x-icon" />
+    <link rel="icon" href="./images/logo/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./images/logo/logo.svg" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="stylesheet" href="./style.css?v=2" />
+    <link rel="stylesheet" href="./delivery.css?v=2" />
+</head>
+
+<body class="panel-page delivery-panel">
+    <div id="onboardingOverlay" class="onboarding-overlay hidden" aria-hidden="true">
+        <div class="onboarding-card">
+            <h2>Welcome, Delivery Partner</h2>
+            <p>Start delivering with Manna Marketplace and stay on top of pickup, routing, and customer communication.
+            </p>
+            <ul>
+                <li>Claim delivery requests with a tap</li>
+                <li>Use Google Maps links for accurate navigation</li>
+                <li>Chat with customers and sellers instantly</li>
+            </ul>
+            <button id="closeOnboarding" class="primary-btn">Start delivering</button>
+        </div>
+    </div>
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loader"></div>
+    </div>
+
+    <div id="authScreen" class="auth-screen">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="brand-logo" />
+                <div>
+                    <h1>Manna Marketplace</h1>
+                    <p>Delivery Person Portal</p>
+                </div>
+            </div>
+
+            <a href="./index.html" class="auth-back-link">
+                <span class="back-icon" aria-hidden="true">←</span>
+                <span>Back to default login</span>
+            </a>
+
+            <form id="loginForm" class="auth-form">
+                <label>Email<input id="loginEmail" type="email" required /></label>
+                <label>Password<div class="password-input-wrap"><input id="loginPassword" type="password"
+                            required /><button type="button" class="password-toggle" aria-label="Show password"
+                            title="Show password"></button></div></label>
+                <button type="submit" class="primary-btn">Sign In</button>
+                <button type="button" id="showRegisterButton" class="ghost-btn">Create account</button>
+                <button type="button" id="forgotPasswordButton" class="text-btn">Forgot password?</button>
+            </form>
+
+            <form id="registerForm" class="auth-form hidden">
+                <label>Full Name<input id="registerName" required /></label>
+                <label>Phone<input id="registerPhone" required /></label>
+                <label>Email<input id="registerEmail" type="email" required /></label>
+                <label>Password<div class="password-input-wrap"><input id="registerPassword" type="password"
+                            required /><button type="button" class="password-toggle" aria-label="Show password"
+                            title="Show password"></button></div></label>
+                <label>Confirm Password<div class="password-input-wrap"><input id="registerConfirmPassword"
+                            type="password" required /><button type="button" class="password-toggle"
+                            aria-label="Show password" title="Show password"></button></div></label>
+                <label>Vehicle Type<select id="registerVehicleType">
+                        <option value="Bicycle">Bicycle</option>
+                        <option value="Motorcycle">Motorcycle</option>
+                        <option value="Car">Car</option>
+                    </select></label>
+                <button type="submit" class="primary-btn">Create Delivery Account</button>
+                <button type="button" id="showLoginButton" class="ghost-btn">Back to login</button>
+            </form>
+
+            <div id="authMessage" class="auth-message"></div>
+        </div>
+    </div>
+
+    <div id="appShell" class="app-shell hidden">
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-container">
+                    <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="logo-img" />
+                    <div class="brand-group">
+                        <h2 class="brand-text">Manna Marketplace</h2>
+                        <p class="panel-title">Delivery</p>
+                    </div>
+                </div>
+                <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close sidebar">✕</button>
+            </div>
+
+            <nav class="sidebar-nav" aria-label="Delivery navigation">
+                <div class="nav-list nav-links">
+                    <button class="nav-item active" data-section="dashboard"><span class="nav-icon"><svg
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M4 10.5L12 4l8 6.5" />
+                                <path d="M6.5 10.5V20h11V10.5" />
+                            </svg></span><span>Dashboard</span></button>
+                    <button class="nav-item" data-section="available"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
+                                <path d="M9 8h6M9 12h6M9 16h4" />
+                            </svg></span><span>Available</span></button>
+                    <button class="nav-item" data-section="active"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 19V9" />
+                                <path d="M12 19V5" />
+                                <path d="M19 19v-7" />
+                            </svg></span><span>Active</span></button>
+                    <button class="nav-item" data-section="history"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 7v5l3 2" />
+                                <path d="M12 3a9 9 0 100 18 9 9 0 000-18z" />
+                            </svg></span><span>History</span></button>
+                    <button class="nav-item" data-section="sellers"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 21V8" />
+                                <path d="M19 21V5" />
+                                <path d="M5 8l7-3 7 3" />
+                                <path d="M9 21v-5h6v5" />
+                            </svg></span><span>Sellers</span></button>
+                    <button class="nav-item" data-section="notifications"><span class="nav-icon"><svg
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 8a7 7 0 0114 0v4l2 3H3l2-3z" />
+                                <path d="M10 19a2 2 0 004 0" />
+                            </svg></span><span>Notifications</span></button>
+                    <button class="nav-item" data-section="profile"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 12a4 4 0 100-8 4 4 0 000 8z" />
+                                <path d="M4 20a8 8 0 0116 0" />
+                            </svg></span><span>Profile</span></button>
+                    <button class="nav-item" data-section="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <circle cx="12" cy="12" r="3" />
+                                <path
+                                    d="M19 12a7 7 0 00-.1-1l2.2-1.7-2-3.5-2.7 1.1a7 7 0 00-1.7-1L14 3h-4l-.7 2.9a7 7 0 00-1.7 1L4.9 5.8l-2 3.5 2.2 1.7a7 7 0 000 2l-2.2 1.7 2 3.5 2.7-1.1a7 7 0 001.7 1L10 21h4l.7-2.9a7 7 0 001.7-1l2.7 1.1 2-3.5-2.2-1.7c.1-.3.1-.7.1-1z" />
+                            </svg></span><span>Settings</span></button>
+                    <button class="nav-item" data-section="help"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 3a9 9 0 100 18 9 9 0 000-18z" />
+                                <path d="M12 15v1" />
+                                <path d="M10 8.5a2 2 0 113.8 1.7c-.4.2-.8.6-.8 1.3v.5" />
+                            </svg></span><span>Help Center</span></button>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button class="logout-btn" id="logoutButton" type="button">Logout</button>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="topbar">
+                <div class="topbar-mobile-brand">
+                    <div class="brand-block">
+                        <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="brand-logo" />
+                        <div>
+                            <h3>Manna Marketplace</h3>
+                            <p>Delivery Partner Portal</p>
+                        </div>
+                    </div>
+                    <div class="topbar-mobile-actions">
+                        <span class="user-role">Delivery Partner</span>
+                    </div>
+                </div>
+                <div class="topbar-start">
+                    <div>
+                        <h1 id="pageTitle">Dashboard</h1>
+                        <p id="pageSubtitle">Pick up, deliver, and keep your route moving.</p>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button id="notificationBell" class="icon-btn notification-button" aria-label="Notifications">
+                        <span class="notification-icon">🔔</span>
+                        <span id="notificationCount" class="notification-badge hidden">0</span>
+                    </button>
+                    <button id="supportButton" class="ghost-btn">Help</button>
+                    <button id="refreshButton" class="ghost-btn">Refresh</button>
+                </div>
+            </header>
+
+            <div class="page-header">
+                <div>
+                    <p class="eyebrow">Manna Marketplace</p>
+                    <h2 id="pageHeading">Delivery Console</h2>
+                </div>
+                <div class="breadcrumb" id="pageBreadcrumb">Dashboard / Overview</div>
+            </div>
+
+            <div id="notificationDropdown" class="notification-dropdown hidden"></div>
+
+            <section id="dashboardSection" class="section-panel active">
+                <div class="stats-grid">
+                    <div class="panel-card stat-card">
+                        <h3>Available Orders</h3>
+                        <div id="statAvailable" class="stat-value">0</div>
+                    </div>
+                    <div class="panel-card stat-card">
+                        <h3>Active Deliveries</h3>
+                        <div id="statActive" class="stat-value">0</div>
+                    </div>
+                    <div class="panel-card stat-card">
+                        <h3>Completed Today</h3>
+                        <div id="statToday" class="stat-value">0</div>
+                    </div>
+                    <div class="panel-card stat-card">
+                        <h3>Average Rating</h3>
+                        <div id="statRating" class="stat-value">0.0</div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Quick Actions</h3>
+                    </div>
+                    <div class="action-row">
+                        <button class="primary-btn" data-section="available">View Available Orders</button>
+                        <button class="ghost-btn" data-section="active">My Active Deliveries</button>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Recent Activity</h3>
+                    </div>
+                    <div id="recentActivityList" class="stack"></div>
+                </div>
+
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>My Sellers</h3>
+                    </div>
+                    <div id="mySellersList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="availableSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Available Orders</h3>
+                    </div>
+                    <div id="availableOrdersList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="activeSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Active Deliveries</h3>
+                    </div>
+                    <div id="activeDeliveriesList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="historySection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Delivery History</h3>
+                    </div>
+                    <div id="historyList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="sellersSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Sellers</h3>
+                    </div>
+                    <div id="sellersList" class="stack"></div>
+                </div>
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>My Requests</h3>
+                    </div>
+                    <div id="myRequestsList" class="stack"></div>
+                </div>
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Approved Sellers</h3>
+                    </div>
+                    <div id="approvedSellersList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="notificationsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Notifications</h3>
+                    </div>
+                    <div id="notificationsList" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="profileSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Profile</h3>
+                        <button id="saveProfileButton" class="primary-btn">Save</button>
+                    </div>
+                    <div id="profileForm" class="form-grid"></div>
+                </div>
+            </section>
+
+            <section id="settingsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Settings</h3>
+                    </div>
+                    <div id="settingsContent" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="helpSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Help Center</h3>
+                        <span class="badge">Guides & tips</span>
+                    </div>
+                    <div id="helpSessionContent" class="stack"></div>
+                    <div id="helpArticlesList" class="card-grid"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="mobile-bottom-nav" id="mobileBottomNav">
+        <button class="mobile-nav-item active" data-section="dashboard" aria-label="Dashboard"><svg viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M4 10.5L12 4l8 6.5" />
+                <path d="M6.5 10.5V20h11V10.5" />
+            </svg></button>
+        <button class="mobile-nav-item" data-section="available" aria-label="Available"><svg viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
+                <path d="M9 8h6M9 12h6M9 16h4" />
+            </svg></button>
+        <button class="mobile-nav-item" data-section="active" aria-label="Active"><svg viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.8">
+                <path d="M5 19V9" />
+                <path d="M12 19V5" />
+                <path d="M19 19v-7" />
+            </svg></button>
+        <button class="mobile-nav-item" id="mobileMenuButton" aria-label="More"><svg viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.8">
+                <path d="M5 7h14" />
+                <path d="M5 12h14" />
+                <path d="M5 17h14" />
+            </svg></button>
+    </div>
+
+    <div id="toastRoot" class="toast-root"></div>
+
+    <div id="modalBackdrop" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modalTitle">Dialog</h3>
+                <button id="modalClose" class="ghost-btn">×</button>
+            </div>
+            <div id="modalBody" class="modal-body"></div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script src="./button-utils.js"></script>
+    <script type="module" src="./delivery-panel.js?v=2"></script>
+    <script src="./password-toggle.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[Manna Marketplace] SW failed:', err));
+        }
+    </script>
+</body>
+
+</html>

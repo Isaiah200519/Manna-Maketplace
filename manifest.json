@@ -1,0 +1,23 @@
+{
+    "name": "Manna Marketplace",
+    "short_name": "Manna Marketplace",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#121212",
+    "theme_color": "#F97316",
+    "orientation": "portrait",
+    "description": "Manna Marketplace – Premium multi-role food delivery and marketplace platform.",
+    "icons": [
+        {
+            "src": "./images/logo/logo.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        },
+        {
+            "src": "./images/logo/logo.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
+}

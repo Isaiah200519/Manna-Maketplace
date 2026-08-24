@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Manna Marketplace Platform • Launch Portal</title>
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="description"
+        content="Manna Marketplace launch portal for deploying and accessing customer, delivery, seller, and admin dashboards." />
+    <link rel="shortcut icon" href="./favicon.ico" type="image/x-icon" />
+    <link rel="icon" href="./images/logo/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./images/logo/logo.svg" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body class="panel-page index-page">
+    <div class="shell">
+        <header class="hero-card hero-spotlight">
+            <div class="hero-copy">
+                <div class="eyebrow">Premium delivery platform</div>
+                <h1>Launch the future of food commerce with Manna Marketplace.</h1>
+                <p>Experience a refined, high-performance multi-role experience for customers, sellers, delivery
+                    partners, and admins.</p>
+                <div class="hero-actions">
+                    <button id="seedButton" class="primary-btn">Seed demo data</button>
+                    <a href="./admin.html" class="ghost-btn">Open admin</a>
+                    <div class="hero-role-links-inline">
+                        <a href="./customer.html" class="ghost-btn hero-role-link">Customer</a>
+                        <a href="./seller.html" class="ghost-btn hero-role-link">Seller</a>
+                        <a href="./delivery.html" class="ghost-btn hero-role-link">Delivery</a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="grid-layout">
+            <section class="panel-card auth-panel">
+                <h2>Sign in or create an account</h2>
+                <p class="muted">Choose a role and the platform will route you to the right dashboard.</p>
+
+                <form id="loginForm" class="auth-form">
+                    <label>Email<input id="loginEmail" type="email" required /></label>
+                    <label>Password<div class="password-input-wrap"><input id="loginPassword" type="password"
+                                required /><button type="button" class="password-toggle" aria-label="Show password"
+                                title="Show password"></button></div></label>
+                    <button type="submit" class="primary-btn">Sign In</button>
+
+                    <div class="auth-divider"><span>Or continue with</span></div>
+                    <div class="auth-option-grid">
+                        <button type="button" id="loginGoogleButton" class="secondary-btn provider-btn">Continue with
+                            Google</button>
+                        <button type="button" id="showLoginPhoneModal" class="ghost-btn provider-btn">Continue with
+                            phone</button>
+                    </div>
+
+                    <div id="loginPhoneModal" class="auth-modal hidden">
+                        <div class="auth-method-card">
+                            <label>Phone number<input id="loginPhoneNumber" type="tel"
+                                    placeholder="+231 77 123 4567" /></label>
+                            <div class="auth-inline-actions">
+                                <button type="button" id="loginPhoneSendButton" class="secondary-btn">Send SMS
+                                    code</button>
+                                <button type="button" id="loginPhoneVerifyButton" class="primary-btn">Verify
+                                    code</button>
+                            </div>
+                            <div id="loginPhoneOtpGroup" class="hidden">
+                                <label>SMS code<input id="loginPhoneOtp" inputmode="numeric"
+                                        autocomplete="one-time-code" /></label>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <form id="registerForm" class="auth-form hidden">
+                    <label>Full Name<input id="registerName" required /></label>
+                    <label>Email<input id="registerEmail" type="email" required /></label>
+                    <label>Password<div class="password-input-wrap"><input id="registerPassword" type="password"
+                                required /><button type="button" class="password-toggle" aria-label="Show password"
+                                title="Show password"></button></div></label>
+                    <label>Role<select id="registerRole">
+                            <option value="customer">Customer</option>
+                            <option value="seller">Seller</option>
+                            <option value="delivery_person">Delivery Person</option>
+                            <option value="admin">Admin</option>
+                        </select></label>
+                    <button type="submit" class="primary-btn">Create Account</button>
+
+                    <div class="auth-divider"><span>Or register with</span></div>
+                    <div class="auth-option-grid">
+                        <button type="button" id="registerGoogleButton" class="secondary-btn provider-btn">Sign up with
+                            Google</button>
+                        <button type="button" id="showRegisterPhoneModal" class="ghost-btn provider-btn">Register with
+                            phone</button>
+                    </div>
+
+                    <div id="registerPhoneModal" class="auth-modal hidden">
+                        <div class="auth-method-card">
+                            <label>Phone number<input id="registerPhoneNumber" type="tel"
+                                    placeholder="+231 77 123 4567" /></label>
+                            <div class="auth-inline-actions">
+                                <button type="button" id="registerPhoneSendButton" class="secondary-btn">Send SMS
+                                    code</button>
+                                <button type="button" id="registerPhoneVerifyButton" class="primary-btn">Verify
+                                    code</button>
+                            </div>
+                            <div id="registerPhoneOtpGroup" class="hidden">
+                                <label>SMS code<input id="registerPhoneOtp" inputmode="numeric"
+                                        autocomplete="one-time-code" /></label>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <form id="passwordResetForm" class="auth-form hidden">
+                    <p class="auth-help-text">Recover access with your email, phone number, or Google account.</p>
+                    <label>Email or phone<input id="resetIdentifier" type="text"
+                            placeholder="name@example.com or +231 77 123 4567" /></label>
+                    <div class="auth-inline-actions">
+                        <button type="button" id="resetPasswordButton" class="primary-btn">Send reset link</button>
+                        <button type="button" id="resetGoogleButton" class="secondary-btn">Use Google</button>
+                    </div>
+                    <button type="button" id="showResetPhoneModal" class="ghost-btn provider-btn">Use phone to recover
+                        access</button>
+                    <div id="resetPhoneModal" class="auth-modal hidden">
+                        <div class="auth-method-card">
+                            <label>Phone number<input id="resetPhoneNumber" type="tel"
+                                    placeholder="+231 77 123 4567" /></label>
+                            <div class="auth-inline-actions">
+                                <button type="button" id="resetPhoneSendButton" class="secondary-btn">Send SMS
+                                    code</button>
+                                <button type="button" id="resetPhoneVerifyButton" class="primary-btn">Verify
+                                    code</button>
+                            </div>
+                            <div id="resetPhoneOtpGroup" class="hidden">
+                                <label>SMS code<input id="resetPhoneOtp" inputmode="numeric"
+                                        autocomplete="one-time-code" /></label>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="action-row">
+                    <button id="showRegisterButton" class="ghost-btn">Create account</button>
+                    <button id="showLoginButton" class="ghost-btn hidden">Back to login</button>
+                    <button id="showResetButton" class="text-btn">Forgot password?</button>
+                </div>
+                <div class="other-roles">
+                    <button id="toggleOtherRoles" type="button" class="ghost-btn">Other Roles</button>
+                    <div id="otherRolesMenu" class="other-roles-menu hidden" aria-hidden="true">
+                        <a href="./admin.html">Admin</a>
+                        <a href="./seller.html">Seller</a>
+                        <a href="./delivery.html">Delivery Person</a>
+                    </div>
+                </div>
+                <div id="phoneRecaptchaContainer" class="recaptcha-host" aria-hidden="true"></div>
+                <div id="authMessage" class="auth-message"></div>
+            </section>
+
+            <section class="panel-card features-panel">
+                <div class="hero-intro">
+                    <span class="eyebrow">Welcome to Liberia’s premium food experience</span>
+                    <h2>Manna Marketplace brings local sellers, delivery partners, and hungry customers together.
+                    </h2>
+                    <p class="muted">From Monrovia streets to coastal kitchens, Manna Marketplace makes ordering,
+                        managing, and
+                        delivering meals faster, smarter, and more reliable.</p>
+                    <div class="hero-actions">
+                        <a href="./customer.html" class="primary-btn">Explore as Customer</a>
+                        <a href="./seller.html" class="ghost-btn">Open Seller Panel</a>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+    <script type="module" src="./app.js"></script>
+    <script type="module" src="./seed-data.js"></script>
+    <script src="./password-toggle.js"></script>
+</body>
+
+</html>

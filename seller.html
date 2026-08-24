@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Manna Marketplace Seller • Store Dashboard</title>
+    <meta name="description"
+        content="Manna Marketplace seller dashboard for managing store products, orders, and customer interactions." />
+    <link rel="shortcut icon" href="./favicon.ico" type="image/x-icon" />
+    <link rel="icon" href="./images/logo/logo.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./images/logo/logo.svg" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./seller.css" />
+</head>
+
+<body class="panel-page seller-panel">
+    <div id="onboardingOverlay" class="onboarding-overlay hidden" aria-hidden="true">
+        <div class="onboarding-card">
+            <h2>Welcome, Seller Partner</h2>
+            <p>Manna Marketplace helps you manage your store, orders, payments, and support from one dashboard.</p>
+            <ul>
+                <li>Update your seller profile and images</li>
+                <li>Manage store items and promotions</li>
+                <li>Track incoming deliveries and customer feedback</li>
+            </ul>
+            <button id="closeOnboarding" class="primary-btn">Let’s go</button>
+        </div>
+    </div>
+    <div id="authScreen" class="auth-screen">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="brand-logo" />
+                <div>
+                    <h1>Manna Marketplace</h1>
+                    <p>Seller Control Panel</p>
+                </div>
+            </div>
+            <a href="./index.html" class="auth-back-link">
+                <span class="back-icon" aria-hidden="true">←</span>
+                <span>Back to default login</span>
+            </a>
+            <form id="loginForm" class="auth-form">
+                <label>
+                    Email
+                    <input type="email" id="loginEmail" required placeholder="seller@example.com" />
+                </label>
+                <label>
+                    Password
+                    <div class="password-input-wrap">
+                        <input type="password" id="loginPassword" required placeholder="Your password" />
+                        <button type="button" class="password-toggle" aria-label="Show password"
+                            title="Show password"></button>
+                    </div>
+                </label>
+                <button type="submit" id="loginButton">Sign In</button>
+                <button type="button" id="showRegisterButton" class="ghost-btn">Create a seller account</button>
+                <button type="button" id="forgotPasswordButton" class="text-btn">Forgot password?</button>
+            </form>
+
+            <form id="registerForm" class="auth-form hidden">
+                <label>
+                    Seller Name
+                    <input type="text" id="registerBusinessName" required placeholder="Manna Marketplace Kitchen" />
+                </label>
+                <label>
+                    Owner Name
+                    <input type="text" id="registerOwnerName" required placeholder="John Doe" />
+                </label>
+                <label>
+                    Phone
+                    <input type="tel" id="registerPhone" required placeholder="0770123456" />
+                </label>
+                <label>
+                    Email
+                    <input type="email" id="registerEmail" required placeholder="seller@example.com" />
+                </label>
+                <label>
+                    Password
+                    <div class="password-input-wrap">
+                        <input type="password" id="registerPassword" required placeholder="Create a password" />
+                        <button type="button" class="password-toggle" aria-label="Show password"
+                            title="Show password"></button>
+                    </div>
+                </label>
+                <label>
+                    Confirm Password
+                    <div class="password-input-wrap">
+                        <input type="password" id="registerConfirmPassword" required placeholder="Re-enter password" />
+                        <button type="button" class="password-toggle" aria-label="Show password"
+                            title="Show password"></button>
+                    </div>
+                </label>
+                <button type="submit" id="registerButton">Create Account</button>
+                <button type="button" id="showLoginButton" class="ghost-btn">Already have an account?</button>
+            </form>
+
+            <div id="authMessage" class="auth-message"></div>
+        </div>
+    </div>
+
+    <div id="appShell" class="app-shell hidden">
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-container">
+                    <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="logo-img" />
+                    <div class="brand-group">
+                        <h2 class="brand-text">Manna Marketplace</h2>
+                        <p class="panel-title">Seller</p>
+                    </div>
+                </div>
+                <button class="sidebar-close" id="sidebarClose" type="button" aria-label="Close sidebar">✕</button>
+            </div>
+            <nav class="sidebar-nav" aria-label="Seller navigation">
+                <div class="nav-list nav-links">
+                    <button class="nav-item active" data-section="dashboard"><span class="nav-icon"><svg
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M4 10.5L12 4l8 6.5" />
+                                <path d="M6.5 10.5V20h11V10.5" />
+                            </svg></span><span>Dashboard</span></button>
+                    <button class="nav-item" data-section="profile"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 12a4 4 0 100-8 4 4 0 000 8z" />
+                                <path d="M4 20a8 8 0 0116 0" />
+                            </svg></span><span>Profile</span></button>
+                    <button class="nav-item" data-section="catalog"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M4 7l8-3 8 3v10l-8 3-8-3z" />
+                                <path d="M4 7l8 3 8-3" />
+                                <path d="M12 10v11" />
+                            </svg></span><span>Catalog</span></button>
+                    <button class="nav-item" data-section="menu"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <rect x="4" y="4" width="16" height="16" rx="2" />
+                                <path d="M8 8h8M8 12h8M8 16h5" />
+                            </svg></span><span>Store</span></button>
+                    <button class="nav-item" data-section="orders"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
+                                <path d="M9 8h6M9 12h6M9 16h4" />
+                            </svg></span><span>Orders</span></button>
+                    <button class="nav-item" data-section="reviews"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 6h14v8H8l-3 3V6z" />
+                                <path d="M8 10h8" />
+                                <path d="M8 13h5" />
+                            </svg></span><span>Reviews</span></button>
+                    <button class="nav-item" data-section="delivery-partners"><span class="nav-icon"><svg
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 21V8" />
+                                <path d="M19 21V5" />
+                                <path d="M5 8l7-3 7 3" />
+                                <path d="M9 21v-5h6v5" />
+                            </svg></span><span>Delivery Partners</span></button>
+                    <button class="nav-item" data-section="promotions"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M6 3h12v6l-2 2 2 2v6H6v-6l2-2-2-2z" />
+                            </svg></span><span>Promotions</span></button>
+                    <button class="nav-item" data-section="coupons"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 7h14v3a2 2 0 00-2 2 2 2 0 002 2v3H5v-3a2 2 0 002-2 2 2 0 00-2-2z" />
+                            </svg></span><span>Coupons</span></button>
+                    <button class="nav-item" data-section="analytics"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 19V9" />
+                                <path d="M12 19V5" />
+                                <path d="M19 19v-7" />
+                            </svg></span><span>Analytics</span></button>
+                    <button class="nav-item" data-section="notifications"><span class="nav-icon"><svg
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 4a5 5 0 00-5 5v3l-1 2h12l-1-2V9a5 5 0 00-5-5z" />
+                                <path d="M10 18a2 2 0 104 0" />
+                            </svg></span><span>Notifications</span></button>
+                    <button class="nav-item" data-section="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <circle cx="12" cy="12" r="3" />
+                                <path
+                                    d="M19 12a7 7 0 00-.1-1l2.2-1.7-2-3.5-2.7 1.1a7 7 0 00-1.7-1L14 3h-4l-.7 2.9a7 7 0 00-1.7 1L4.9 5.8l-2 3.5 2.2 1.7a7 7 0 000 2l-2.2 1.7 2 3.5 2.7-1.1a7 7 0 001.7 1L10 21h4l.7-2.9a7 7 0 001.7-1l2.7 1.1 2-3.5-2.2-1.7c.1-.3.1-.7.1-1z" />
+                            </svg></span><span>Settings</span></button>
+                    <button class="nav-item" data-section="help"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M12 3a9 9 0 100 18 9 9 0 000-18z" />
+                                <path d="M12 15v1" />
+                                <path d="M10 8.5a2 2 0 113.8 1.7c-.4.2-.8.6-.8 1.3v.5" />
+                            </svg></span><span>Help Center</span></button>
+                    <button class="nav-item" data-section="chat"><span class="nav-icon"><svg viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path d="M5 6h14v8H8l-3 3V6z" />
+                                <path d="M8 10h8" />
+                                <path d="M8 13h5" />
+                            </svg></span><span>Chat</span></button>
+                </div>
+            </nav>
+            <div class="sidebar-footer">
+                <button class="logout-btn" id="logoutButton" type="button">Logout</button>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="topbar">
+                <div class="topbar-mobile-brand">
+                    <div class="brand-block">
+                        <img src="./images/logo/logo.svg" alt="Manna Marketplace logo" class="brand-logo" />
+                        <div>
+                            <h3>Manna Marketplace</h3>
+                            <p>Seller Console</p>
+                        </div>
+                    </div>
+                    <div class="topbar-mobile-actions">
+                        <span class="user-role">Seller</span>
+                    </div>
+                </div>
+                <div class="topbar-start">
+                    <div>
+                        <h1 id="pageTitle">Dashboard</h1>
+                        <p id="pageSubtitle">Track store performance and orders in real time.</p>
+                    </div>
+                </div>
+                <div class="topbar-actions">
+                    <button id="notificationsToggle" class="icon-btn" aria-label="Notifications">
+                        <span>🔔</span>
+                        <span id="notificationBadgeCount" class="badge hidden">0</span>
+                    </button>
+                    <button id="supportButton" class="ghost-btn">Help</button>
+                    <div id="userBadge" class="user-badge"></div>
+                </div>
+            </header>
+
+            <div class="page-header">
+                <div>
+                    <p class="eyebrow">Manna Marketplace</p>
+                    <h2 id="pageHeading">Seller Console</h2>
+                </div>
+                <div class="breadcrumb" id="pageBreadcrumb">Home / Dashboard</div>
+            </div>
+
+            <section id="dashboardSection" class="section-panel active">
+                <div id="dashboardStats" class="stats-grid"></div>
+                <div class="content-grid">
+                    <div class="panel-card">
+                        <div class="panel-card-header">
+                            <h3>Recent Orders</h3>
+                            <button class="ghost-btn" data-section="orders">View all</button>
+                        </div>
+                        <div id="recentOrdersList" class="list-stack"></div>
+                    </div>
+                    <div class="panel-card">
+                        <div class="panel-card-header">
+                            <h3>Delivery Requests</h3>
+                            <span class="badge">Join requests</span>
+                        </div>
+                        <div id="deliveryRequestsList" class="list-stack"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="profileSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Seller Profile</h3>
+                        <button id="saveProfileButton" class="primary-btn">Save Profile</button>
+                    </div>
+                    <form id="profileForm" class="form-grid"></form>
+                </div>
+            </section>
+
+            <section id="catalogSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Master Catalog</h3>
+                        <div class="toolbar">
+                            <input id="catalogSearch" type="search" placeholder="Search catalog" />
+                            <select id="catalogCategoryFilter" title="Filter catalog by category">
+                                <option value="all">All categories</option>
+                            </select>
+                            <select id="catalogStatusFilter" title="Filter catalog by status">
+                                <option value="all">All statuses</option>
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="catalogGrid" class="card-grid"></div>
+                </div>
+            </section>
+
+            <section id="menuSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>My Store</h3>
+                        <div class="toolbar">
+                            <input id="menuSearch" type="search" placeholder="Search store" />
+                            <select id="menuCategoryFilter" title="Filter store by category">
+                                <option value="all">All categories</option>
+                            </select>
+                            <select id="menuAvailabilityFilter" title="Filter store by availability">
+                                <option value="all">Availability</option>
+                                <option value="available">Available</option>
+                                <option value="unavailable">Unavailable</option>
+                            </select>
+                            <select id="menuSort" title="Sort store items">
+                                <option value="name">Sort by name</option>
+                                <option value="price">Sort by price</option>
+                                <option value="popularity">Sort by popularity</option>
+                            </select>
+                            <div class="view-toggle">
+                                <button class="ghost-btn active" data-view="grid">Grid</button>
+                                <button class="ghost-btn" data-view="list">List</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bulk-actions">
+                        <button id="bulkActivateButton" class="ghost-btn">Activate selected</button>
+                        <button id="bulkDeactivateButton" class="ghost-btn">Deactivate selected</button>
+                        <button id="bulkDeleteButton" class="ghost-btn danger">Delete selected</button>
+                    </div>
+                    <div id="menuContent" class="card-grid"></div>
+                </div>
+            </section>
+
+            <section id="ordersSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Orders</h3>
+                        <select id="orderStatusFilter" title="Filter orders by status">
+                            <option value="all">All statuses</option>
+                            <option value="pending">Pending</option>
+                            <option value="accepted">Accepted</option>
+                            <option value="preparing">Preparing</option>
+                            <option value="ready">Ready for Pickup</option>
+                            <option value="picked_up">Picked Up</option>
+                            <option value="delivered">Delivered</option>
+                            <option value="cancelled">Cancelled</option>
+                            <option value="refunded">Refunded</option>
+                        </select>
+                    </div>
+                    <div id="ordersList" class="list-stack"></div>
+                </div>
+            </section>
+
+            <section id="reviewsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Reviews</h3>
+                        <span class="badge">Customer feedback</span>
+                    </div>
+                    <div id="reviewsList" class="list-stack"></div>
+                </div>
+            </section>
+
+            <section id="deliveryPartnersSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Delivery Partners</h3>
+                        <span class="badge">Recruit & manage riders</span>
+                    </div>
+                    <div class="tab-switcher" aria-label="Delivery partner tabs">
+                        <button class="tab-btn active" data-delivery-partners-tab="all">All Delivery Persons</button>
+                        <button class="tab-btn" data-delivery-partners-tab="approved">My Approved Partners</button>
+                    </div>
+                    <div id="deliveryPartnersContent"></div>
+                </div>
+            </section>
+
+            <section id="promotionsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Promotions</h3>
+                        <button id="createPromotionButton" class="primary-btn">Create Promotion</button>
+                    </div>
+                    <div id="promotionsList" class="card-grid"></div>
+                </div>
+            </section>
+
+            <section id="couponsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Coupons</h3>
+                        <button id="createCouponButton" class="primary-btn">Create Coupon</button>
+                    </div>
+                    <div id="couponsList" class="card-grid"></div>
+                </div>
+            </section>
+
+            <section id="analyticsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Store Analytics</h3>
+                        <span class="badge">Live insights</span>
+                    </div>
+                    <div class="toolbar analytics-toolbar">
+                        <label>From<input id="analyticsStartDate" type="date" /></label>
+                        <label>To<input id="analyticsEndDate" type="date" /></label>
+                        <button class="ghost-btn" type="button" id="analyticsApplyRangeButton">Apply</button>
+                    </div>
+                    <div id="analyticsSummary" class="stats-grid"></div>
+                    <div class="content-grid analytics-grid">
+                        <div class="panel-card inset-card">
+                            <h4>Recent revenue</h4>
+                            <div id="revenueChart" class="chart"></div>
+                        </div>
+                        <div class="panel-card inset-card">
+                            <h4>Top products</h4>
+                            <div id="productChart" class="chart"></div>
+                        </div>
+                    </div>
+                    <div id="analyticsInsights" class="stack"></div>
+                </div>
+            </section>
+
+            <section id="notificationsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Notifications</h3>
+                        <span id="notificationBadge" class="badge">0 unread</span>
+                    </div>
+                    <div id="notificationsList" class="list-stack"></div>
+                </div>
+            </section>
+
+            <section id="settingsSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Store Settings</h3>
+                        <button id="saveSettingsButton" class="primary-btn">Save Settings</button>
+                    </div>
+                    <form id="settingsForm" class="form-grid"></form>
+                </div>
+            </section>
+
+            <section id="supportSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Support Requests</h3>
+                        <span class="badge">Help center</span>
+                    </div>
+                    <div id="supportRequestsList" class="list-stack"></div>
+                </div>
+            </section>
+
+            <section id="helpSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Help Center</h3>
+                        <span class="badge">Guides & tips</span>
+                    </div>
+                    <div id="helpSessionContent" class="stack"></div>
+                    <div id="helpArticlesList" class="card-grid"></div>
+                </div>
+            </section>
+
+            <section id="chatSection" class="section-panel">
+                <div class="panel-card">
+                    <div class="panel-card-header">
+                        <h3>Support Chat</h3>
+                        <span class="badge">Future-ready</span>
+                    </div>
+                    <div id="chatMessages" class="chat-log"></div>
+                    <form id="chatForm" class="chat-form">
+                        <input id="chatInput" type="text" placeholder="Send a message to the support queue" />
+                        <button type="submit" class="primary-btn">Send</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="toastRoot" class="toast-root"></div>
+    <div class="mobile-bottom-nav" id="mobileBottomNav">
+        <button class="mobile-nav-item active" data-section="dashboard" aria-label="Dashboard"><svg viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M4 10.5L12 4l8 6.5" />
+                <path d="M6.5 10.5V20h11V10.5" />
+            </svg></button>
+        <button class="mobile-nav-item" data-section="orders" aria-label="Orders"><svg viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.8">
+                <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
+                <path d="M9 8h6M9 12h6M9 16h4" />
+            </svg></button>
+        <button class="mobile-nav-item" data-section="notifications" aria-label="Notifications"><svg viewBox="0 0 24 24"
+                fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M12 4a5 5 0 00-5 5v3l-1 2h12l-1-2V9a5 5 0 00-5-5z" />
+                <path d="M10 18a2 2 0 104 0" />
+            </svg></button>
+        <button class="mobile-nav-item" id="mobileMenuButton" aria-label="More"><svg viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.8">
+                <path d="M5 7h14" />
+                <path d="M5 12h14" />
+                <path d="M5 17h14" />
+            </svg></button>
+    </div>
+    <div id="modalBackdrop" class="modal-backdrop hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modalTitle">Dialog</h3>
+                <button id="modalClose" class="ghost-btn">×</button>
+            </div>
+            <div id="modalBody" class="modal-body"></div>
+            <div id="modalActions" class="modal-actions"></div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script src="./button-utils.js"></script>
+    <script type="module" src="./seller-panel.js"></script>
+    <script src="./password-toggle.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[Manna Marketplace] SW failed:', err));
+        }
+    </script>
+</body>
+
+</html>
