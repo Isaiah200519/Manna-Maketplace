@@ -8,6 +8,7 @@ const state = {
     profile: null,
     sellers: [],
     deliveryRequests: [],
+    deliveryPartnerRequests: [],
     allOrders: [],
     notifications: [],
     supportRequests: [],
@@ -22,6 +23,7 @@ const state = {
     profileUnsubscribe: null,
     sellersUnsubscribe: null,
     deliveryRequestsUnsubscribe: null,
+    deliveryPartnerRequestsUnsubscribe: null,
     ordersUnsubscribe: null,
     notificationsUnsubscribe: null,
     chatsUnsubscribe: null
@@ -260,6 +262,10 @@ function bindEvents() {
         const actionButton = event.target.closest('[data-action]');
         if (actionButton) {
             const action = actionButton.dataset.action;
+            if (action === 'respond-delivery-invitation') {
+                handleAction(action, actionButton.dataset.id, actionButton.dataset.response);
+                return;
+            }
             const options = {
                 'pick-up-order': {
                     loadingText: 'Picking Up...',
@@ -479,9 +485,6 @@ async function handleAuthStateChange(user) {
         elements.appShell.classList.remove('hidden');
         showSection(state.activeSection);
         setupRealtimeListeners(user.uid);
-        if (!user.emailVerified) {
-            createToast('Please verify your email before taking deliveries.', 'info');
-        }
         renderAll();
     } catch (error) {
         console.error(error);
@@ -518,6 +521,13 @@ function setupRealtimeListeners(userId) {
     }, (error) => {
         console.error('[Manna Marketplace] Delivery requests listener failed:', error);
     });
+    state.deliveryPartnerRequestsUnsubscribe = db.collection('deliveryPartnerRequests').where('deliveryPersonUid', '==', userId).onSnapshot((snapshot) => {
+        state.deliveryPartnerRequests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        renderSellers();
+        renderPartnerRequests();
+    }, (error) => {
+        console.error('[Manna Marketplace] Delivery partner invitations listener failed:', error);
+    });
 
     state.ordersUnsubscribe = db.collection('orders').onSnapshot((snapshot) => {
         state.allOrders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
@@ -544,10 +554,11 @@ function setupRealtimeListeners(userId) {
 }
 
 function cleanupListeners() {
-    [state.profileUnsubscribe, state.sellersUnsubscribe, state.deliveryRequestsUnsubscribe, state.ordersUnsubscribe, state.notificationsUnsubscribe, state.chatsUnsubscribe].forEach((unsubscribe) => { if (unsubscribe) unsubscribe(); });
+    [state.profileUnsubscribe, state.sellersUnsubscribe, state.deliveryRequestsUnsubscribe, state.deliveryPartnerRequestsUnsubscribe, state.ordersUnsubscribe, state.notificationsUnsubscribe, state.chatsUnsubscribe].forEach((unsubscribe) => { if (unsubscribe) unsubscribe(); });
     state.profileUnsubscribe = null;
     state.sellersUnsubscribe = null;
     state.deliveryRequestsUnsubscribe = null;
+    state.deliveryPartnerRequestsUnsubscribe = null;
     state.ordersUnsubscribe = null;
     state.notificationsUnsubscribe = null;
     state.chatsUnsubscribe = null;
@@ -578,7 +589,7 @@ function renderAllLists() {
 
 function renderDashboard() {
     const approvedSellerIds = state.profile?.approvedSellers || [];
-    const available = state.allOrders.filter((order) => !order.isDeleted && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
+    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => !order.isDeleted && order.paymentStatus === 'confirmed' && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
     const active = state.allOrders.filter((order) => !order.isDeleted && order.deliveryPersonUid === state.authUser?.uid && order.status === 'out_for_delivery');
     const history = state.allOrders.filter((order) => !order.isDeleted && order.deliveryPersonUid === state.authUser?.uid && ['delivered', 'received'].includes(order.status));
     const today = history.filter((order) => {
@@ -644,7 +655,7 @@ function renderDeliveryLocationMap(order) {
 
 function renderAvailableOrders() {
     const approvedSellerIds = state.profile?.approvedSellers || [];
-    const available = state.allOrders.filter((order) => !order.isDeleted && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
+    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => !order.isDeleted && order.paymentStatus === 'confirmed' && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
     const availableOrdersList = document.getElementById('availableOrdersList');
     availableOrdersList.innerHTML = available.length ? available.map((order) => {
         const isClaiming = state.pendingClaimOrderIds.has(order.id);
@@ -685,7 +696,7 @@ function renderActiveDeliveries() {
         <div class="muted">${order.deliveryLandmark || order.deliveryDetails || 'No delivery notes'}</div>
       </div>
       ${renderDeliveryLocationMap(order)}
-      <div class="muted">ETA: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
+    <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
       <div class="action-row">
         <button class="primary-btn" data-action="deliver-order" data-id="${order.id}">Delivered</button>
         <button class="ghost-btn" data-action="report-issue" data-id="${order.id}">Report Issue</button>
@@ -709,20 +720,24 @@ function renderHistory() {
       <div class="muted">${order.customerName || 'Customer'} • ${formatDate(order.updatedAt || order.createdAt)}</div>
       <div class="action-row">
         <button class="ghost-btn" data-action="open-chat" data-id="${order.id}">Chat</button>
-        ${['received', 'refunded'].includes(order.status) ? `<button class="danger-btn" data-action="delete-history" data-id="${order.id}">Delete</button>` : ''}
       </div>
     </div>`).join('') : '<div class="empty-state">Delivery history is empty.</div>';
 }
 
 function renderPartnerRequests() {
-    const list = document.getElementById('partnerRequestsList');
+    const list = document.getElementById('partnerRequestsList') || document.getElementById('myRequestsList');
     if (!list) return;
     const pending = state.deliveryRequests.filter((request) => request.status === 'pending');
-    list.innerHTML = pending.length ? pending.map((request) => `
+        const invitations = state.deliveryPartnerRequests || [];
+        list.innerHTML = pending.length || invitations.length ? `${pending.map((request) => `
       <div class="item-card">
         <div class="panel-card-header"><strong>${request.sellerName || 'Seller'}</strong><span class="badge">Pending</span></div>
         <div class="muted">Your request to partner with this seller is awaiting review.</div>
-      </div>`).join('') : '<div class="empty-state">You have no active partner requests right now.</div>';
+            </div>`).join('')}${invitations.map((invitation) => {
+                const statusLabel = invitation.status === 'approved' ? 'Accepted' : invitation.status === 'rejected' ? 'Declined' : 'Invitation';
+                const response = invitation.status === 'pending' ? `<div class="action-row"><button class="primary-btn" data-action="respond-delivery-invitation" data-id="${invitation.id}" data-response="approved">Accept</button><button class="ghost-btn" data-action="respond-delivery-invitation" data-id="${invitation.id}" data-response="rejected">Decline</button></div>` : '';
+                return `<div class="item-card"><div class="panel-card-header"><strong>${invitation.sellerName || 'Seller'}</strong><span class="badge">${statusLabel}</span></div><div class="muted">${invitation.message || 'This seller invited you to join their delivery network.'}</div>${response}</div>`;
+            }).join('')}` : '<div class="empty-state">You have no active partner requests right now.</div>';
 }
 
 function renderHelpArticles() {
@@ -764,6 +779,7 @@ function renderHelpArticles() {
 
 function renderSellers() {
     const approvedSellerIds = state.profile?.approvedSellers || [];
+    const isAdminApproved = state.profile?.status === 'approved';
     const requestCards = state.deliveryRequests.length ? state.deliveryRequests.map((request) => {
         const seller = state.sellers.find((entry) => entry.id === request.sellerId);
         const statusLabel = request.status === 'approved' ? 'Approved' : request.status === 'rejected' ? 'Declined' : 'Pending';
@@ -779,6 +795,7 @@ function renderSellers() {
       <img src="${getImagePath(seller.logo, 'sellers')}" alt="${seller.name}" />
       <div class="panel-card-header"><strong>${seller.name}</strong><span class="badge">Approved</span></div>
       <div class="muted">${seller.location || 'Location unavailable'} • ${seller.category || 'Seller'}</div>
+                <div class="action-row"><button class="danger-btn" data-action="leave-seller" data-id="${seller.id}">Unassign from restaurant</button></div>
     </div>`).join('') : '<div class="empty-state">No approved seller partners yet.</div>';
     document.getElementById('sellersList').innerHTML = state.sellers.length ? state.sellers.map((seller) => `
     <div class="item-card">
@@ -786,11 +803,12 @@ function renderSellers() {
       <div class="panel-card-header"><strong>${seller.name}</strong><span class="badge">${seller.rating || 'New'}</span></div>
       <div class="muted">${seller.location || 'Location unavailable'} • ${seller.category || 'Seller'}</div>
       <div class="action-row">
-        <button class="${approvedSellerIds.includes(seller.id) ? 'ghost-btn' : 'primary-btn'}" data-action="request-delivery" data-id="${seller.id}">${approvedSellerIds.includes(seller.id) ? 'Approved' : 'Request to Deliver'}</button>
+        <button class="${approvedSellerIds.includes(seller.id) ? 'ghost-btn' : 'primary-btn'}" data-action="request-delivery" data-id="${seller.id}" ${!isAdminApproved && !approvedSellerIds.includes(seller.id) ? 'disabled' : ''}>${approvedSellerIds.includes(seller.id) ? 'Approved' : isAdminApproved ? 'Request to Deliver' : 'Awaiting admin approval'}</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No sellers are available right now.</div>';
     document.getElementById('myRequestsList').innerHTML = requestCards;
     document.getElementById('approvedSellersList').innerHTML = approvedCards;
+    renderPartnerRequests();
 }
 
 function renderProfile() {
@@ -818,7 +836,7 @@ function renderSettings() {
     document.getElementById('settingsContent').innerHTML = `
     <div class="item-card">
       <div class="panel-card-header"><strong>Availability</strong><span class="badge">${profile.isActive ? 'Online' : 'Offline'}</span></div>
-      <label><input type="checkbox" id="availabilityToggle" ${profile.isActive ? 'checked' : ''} /> Available for new deliveries</label>
+    <label><input type="checkbox" id="availabilityToggle" ${profile.isActive !== false ? 'checked' : ''} /> Available for deliveries (turn off for break mode)</label>
       <div class="action-row">
         <button class="primary-btn" data-action="change-password">Change Password</button>
         <button class="danger-btn" data-action="deactivate-account">Deactivate Account</button>
@@ -944,7 +962,7 @@ function setClaimButtonState(orderId, isClaiming) {
     });
 }
 
-async function handleAction(action, id) {
+async function handleAction(action, id, response) {
     if (!state.authUser) return;
     switch (action) {
         case 'pick-up-order':
@@ -960,14 +978,14 @@ async function handleAction(action, id) {
         case 'leave-seller':
             await leaveSeller(id);
             break;
+        case 'respond-delivery-invitation':
+            await respondToDeliveryInvitation(id, response);
+            break;
         case 'mark-notification-read':
             await markNotificationRead(id);
             break;
         case 'delete-notification':
             await deleteNotification(id);
-            break;
-        case 'delete-history':
-            await deleteHistory(id);
             break;
         case 'change-password':
             await handleForgotPassword();
@@ -983,8 +1001,38 @@ async function handleAction(action, id) {
     }
 }
 
+async function respondToDeliveryInvitation(invitationId, response) {
+    const invitation = state.deliveryPartnerRequests.find((entry) => entry.id === invitationId);
+    if (!invitation || invitation.status !== 'pending' || !['approved', 'rejected'].includes(response)) return;
+    try {
+        if (response === 'approved') {
+            const approvedSellers = Array.from(new Set([...(state.profile?.approvedSellers || []), invitation.sellerId]));
+            const seller = state.sellers.find((entry) => entry.id === invitation.sellerId);
+            await Promise.all([
+                db.collection('deliveryPartnerRequests').doc(invitationId).update({ status: 'approved', updatedAt: new Date() }),
+                db.collection('users').doc(state.authUser.uid).set({ approvedSellers, updatedAt: new Date() }, { merge: true }),
+                db.collection('sellers').doc(invitation.sellerId).set({ deliveryPersons: Array.from(new Set([...(seller?.deliveryPersons || []), state.authUser.uid])), updatedAt: new Date() }, { merge: true })
+            ]);
+            createToast('Invitation accepted.', 'success');
+        } else {
+            await db.collection('deliveryPartnerRequests').doc(invitationId).update({ status: 'rejected', updatedAt: new Date() });
+            createToast('Invitation declined.', 'success');
+        }
+    } catch (error) {
+        createToast(error.message || 'Unable to respond to the invitation.', 'error');
+    }
+}
+
 async function pickUpOrder(orderId) {
+    if (state.profile?.status !== 'approved') {
+        createToast('Your delivery account is awaiting admin approval.', 'warning');
+        return false;
+    }
     if (!ensureDeliveryProfileComplete()) return false;
+    if (state.profile?.isActive === false) {
+        createToast('Break mode is on. Turn availability back on before accepting deliveries.', 'warning');
+        return false;
+    }
     if (!orderId || state.pendingClaimOrderIds.has(orderId)) return false;
 
     state.pendingClaimOrderIds.add(orderId);
@@ -1005,8 +1053,15 @@ async function pickUpOrder(orderId) {
             }
 
             const orderData = orderDoc.data() || {};
+            const deliveryProfileDoc = await transaction.get(db.collection('users').doc(state.authUser.uid));
+            if (deliveryProfileDoc.data()?.isActive === false) {
+                throw new Error('Break mode is on. Turn availability back on before accepting deliveries.');
+            }
             if (orderData.deliveryPersonUid) {
                 throw new Error('This order has already been claimed by another driver.');
+            }
+            if (orderData.paymentStatus !== 'confirmed') {
+                throw new Error('This order is waiting for admin payment confirmation.');
             }
             if (!['accepted', 'preparing', 'ready'].includes(orderData.status)) {
                 throw new Error('This order is not available for pickup right now.');
@@ -1087,6 +1142,10 @@ async function reportIssue(orderId) {
 }
 
 async function requestDelivery(sellerId) {
+    if (state.profile?.status !== 'approved') {
+        createToast('Your delivery account must be approved by an admin before joining sellers.', 'warning');
+        return;
+    }
     try {
         const seller = state.sellers.find((entry) => entry.id === sellerId);
         const existing = await db.collection('deliveryRequests').where('deliveryPersonUid', '==', state.authUser.uid).where('sellerId', '==', sellerId).limit(1).get();
@@ -1164,15 +1223,6 @@ async function clearAllNotifications() {
         state.notifications = state.notifications.map((item) => (visible.some((entry) => entry.id === item.id) ? { ...item, read: true, isDeleted: true } : item));
         renderNotifications();
         createToast('All notifications cleared.', 'success');
-    } catch (error) {
-        createToast(error.message, 'error');
-    }
-}
-
-async function deleteHistory(orderId) {
-    try {
-        await db.collection('orders').doc(orderId).set({ isDeleted: true, updatedAt: new Date() }, { merge: true });
-        createToast('Order removed from history.', 'success');
     } catch (error) {
         createToast(error.message, 'error');
     }

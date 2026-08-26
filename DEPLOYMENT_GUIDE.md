@@ -6,9 +6,9 @@ Manna Marketplace uses Firebase Authentication and Cloud Firestore when the Fire
 
 The current GitHub Pages deployment is available at:
 
-<https://isaiah200519.github.io/Manna%20Marketplace/>
+<https://isaiah200519.github.io/Manna-Maketplace/>
 
-The repository currently provides marketplace browsing, seller stores, checkout, order tracking, and role-based panels. Direct shareable product links with seller and product query parameters are planned but are not yet implemented in the current frontend.
+The repository provides marketplace browsing, seller stores, checkout, order tracking, and role-based panels. Sellers can copy direct product checkout links containing `sellerId` and `productId`, and authenticated customers are taken to a pre-filled checkout. Unauthenticated visitors are sent through login while the link parameters are preserved.
 
 ## Firebase setup
 

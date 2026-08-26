@@ -1,6 +1,6 @@
 import { createToast } from './utils.js';
 
-const MANNA_MARKETPLACE_PLATFORM_URL = 'https://isaiah200519.github.io/Manna%20Marketplace/';
+const MANNA_MARKETPLACE_PLATFORM_URL = 'https://isaiah200519.github.io/Manna-Maketplace/';
 
 export function getQRCardHTML(containerId = 'mannaQrContainer', cardId = 'mannaQrCard') {
     return `

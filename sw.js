@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v3-current';
+const CACHE_NAME = 'manna-static-v4-image-preview';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',
@@ -10,6 +10,7 @@ const ASSETS_TO_CACHE = [
     './app.js',
     './auth.js',
     './button-utils.js',
+    './image-preview.js',
     './password-toggle.js',
     './images/logo/logo.svg',
     './favicon.ico',

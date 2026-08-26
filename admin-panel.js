@@ -1576,10 +1576,10 @@ function renderOrders() {
                 <td>${escapeHtml(order.sellerName || 'Seller')}</td>
                 <td><span class="badge-status ${order.status === 'completed' || order.status === 'delivered' ? 'active' : 'pending'}">${escapeHtml(order.status || 'pending')}</span></td>
                 <td>${escapeHtml(order.deliveryLocationLabel || 'Standard')}<div class="body-small">${escapeHtml(order.deliveryLandmark || order.deliveryDetails || 'No notes')}</div></td>
-                <td>${escapeHtml(order.paymentMethod || 'pending')}<div class="body-small">${escapeHtml(order.paymentDetails || '')}</div></td>
+                <td>${escapeHtml(order.paymentMethod || 'pending')}<div class="body-small">${escapeHtml(order.paymentDetails || '')}</div><div class="body-small">${escapeHtml(order.paymentStatus || 'pending')}</div>${order.paymentStatus === 'pending' ? `<button class="primary-btn" onclick="window.confirmOrderPayment('${escapeHtml(order.id)}')">Confirm payment</button>` : ''}</td>
                 <td>${escapeHtml(order.refundStatus || 'none')}<div class="body-small">${escapeHtml(order.refundReason || '')}</div></td>
-                <td>${formatCurrency(order.total)}</td>
-                <td>${formatDate(order.createdAt)}<div class="body-small">ETA: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div></td>
+                <td>${formatCurrency(order.total)}<div class="body-small">Seller payout: ${escapeHtml(order.sellerPayoutStatus || 'pending')}</div><div class="body-small">Delivery payout: ${escapeHtml(order.deliveryPayoutStatus || 'pending')}</div></td>
+                <td>Placed: ${formatDate(order.placedAt || order.createdAt)}<div class="body-small">Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div></td>
               </tr>
             `).join('')}
           </tbody>
@@ -1588,6 +1588,20 @@ function renderOrders() {
     </section>
   `;
 }
+
+window.confirmOrderPayment = async (orderId) => {
+  const order = state.data.orders.find((item) => item.id === orderId);
+  if (!order || order.paymentStatus === 'confirmed') return;
+  const reference = window.prompt('Confirm payment reference', order.paymentDetails || '');
+  if (!reference || !reference.trim()) return;
+  try {
+    await updateDocument('orders', orderId, { paymentStatus: 'confirmed', paymentConfirmedAt: new Date(), paymentConfirmedBy: state.user?.uid || state.user?.email || 'admin', paymentConfirmationReference: reference.trim(), updatedAt: new Date() });
+    await addDocument('notifications', { recipientUid: order.customerUid, title: 'Payment confirmed', message: `Payment for order #${order.orderNumber || order.id.slice(0, 6)} was confirmed.`, type: 'payment', read: false, isDeleted: false, createdAt: new Date() });
+    createToast('Order payment confirmed.', 'success');
+  } catch (error) {
+    createToast(error.message || 'Unable to confirm order payment.', 'error');
+  }
+};
 
 function renderAnalytics() {
   const analytics = buildAnalyticsSnapshot();
@@ -1663,6 +1677,23 @@ function renderAnalytics() {
     state.filters.analytics.range = event.target.value;
     renderAnalytics();
   });
+}
+
+async function sendPaymentReminders() {
+  const now = Date.now();
+  const reminderWindow = 30 * 60 * 1000;
+  const maxAge = 24 * 60 * 60 * 1000;
+  const pendingOrders = state.data.orders.filter((order) => {
+    const createdAt = order.createdAt?.toDate ? order.createdAt.toDate().getTime() : new Date(order.createdAt || order.placedAt || 0).getTime();
+    const lastReminder = order.lastPaymentReminderAt?.toDate ? order.lastPaymentReminderAt.toDate().getTime() : new Date(order.lastPaymentReminderAt || 0).getTime();
+    return order.paymentStatus === 'pending' && createdAt && now - createdAt <= maxAge && (!lastReminder || now - lastReminder >= reminderWindow);
+  });
+  await Promise.all(pendingOrders.map(async (order) => {
+    await updateDocument('orders', order.id, { lastPaymentReminderAt: new Date(), paymentReminderCount: Number(order.paymentReminderCount || 0) + 1, updatedAt: new Date() });
+    if (order.customerUid) {
+      await addDocument('notifications', { recipientUid: order.customerUid, title: 'Payment confirmation pending', message: `Payment for order #${order.orderNumber || order.id.slice(0, 6)} is awaiting admin confirmation.`, type: 'payment', read: false, isDeleted: false, createdAt: new Date() });
+    }
+  }));
 }
 
 function renderReports() {
@@ -1964,6 +1995,13 @@ function renderSettings() {
         <label>Commission (%)<input id="commission" type="number" value="${escapeHtml(settings.commission || 8)}" /></label>
         <label>Currency<input id="currency" value="${escapeHtml(settings.currency || 'LRD')}" /></label>
         <label>Default Delivery Fee<input id="deliveryFee" type="number" value="${escapeHtml(settings.deliveryFee || 60)}" /></label>
+        <label>Regular Delivery Fee<input id="regularDeliveryFee" type="number" value="${escapeHtml(settings.regularDeliveryFee || settings.deliveryFee || 60)}" /></label>
+        <label>Express Delivery Fee<input id="expressDeliveryFee" type="number" value="${escapeHtml(settings.expressDeliveryFee || 120)}" /></label>
+        <label>Regular Delivery Days<input id="regularDeliveryDays" type="number" value="${escapeHtml(settings.regularDeliveryDays || 3)}" /></label>
+        <label>Express Delivery Hours<input id="expressDeliveryHours" type="number" value="${escapeHtml(settings.expressDeliveryHours || 24)}" /></label>
+        <label>Admin Orange Money Number<input id="adminOrangeMoneyNumber" value="${escapeHtml(settings.adminOrangeMoneyNumber || '')}" /></label>
+        <label>Admin Lonestar Number<input id="adminLonestarMoneyNumber" value="${escapeHtml(settings.adminLonestarMoneyNumber || '')}" /></label>
+        <label>Admin WhatsApp Number<input id="adminWhatsAppNumber" type="tel" value="${escapeHtml(settings.adminWhatsAppNumber || '')}" placeholder="e.g. +231770000000" /></label>
         <label>Tax (%)<input id="tax" type="number" value="${escapeHtml(settings.tax || 2)}" /></label>
         <label>Support Email<input id="supportEmail" value="${escapeHtml(settings.supportEmail || '')}" /></label>
         <label>Support Phone<input id="supportPhone" value="${escapeHtml(settings.supportPhone || '')}" /></label>
@@ -1987,6 +2025,13 @@ function renderSettings() {
       commission: Number(document.getElementById('commission').value || 0),
       currency: document.getElementById('currency').value,
       deliveryFee: Number(document.getElementById('deliveryFee').value || 0),
+      regularDeliveryFee: Number(document.getElementById('regularDeliveryFee').value || 0),
+      expressDeliveryFee: Number(document.getElementById('expressDeliveryFee').value || 0),
+      regularDeliveryDays: Number(document.getElementById('regularDeliveryDays').value || 3),
+      expressDeliveryHours: Number(document.getElementById('expressDeliveryHours').value || 24),
+      adminOrangeMoneyNumber: document.getElementById('adminOrangeMoneyNumber').value.trim(),
+      adminLonestarMoneyNumber: document.getElementById('adminLonestarMoneyNumber').value.trim(),
+      adminWhatsAppNumber: document.getElementById('adminWhatsAppNumber').value.trim(),
       tax: Number(document.getElementById('tax').value || 0),
       supportEmail: document.getElementById('supportEmail').value,
       supportPhone: document.getElementById('supportPhone').value,
@@ -2784,6 +2829,8 @@ function initializeLocalStorageSync() {
     createToast('Local storage is unavailable.', 'warning');
     return;
   }
+
+  window.setInterval(() => sendPaymentReminders().catch((error) => console.error('[Manna Marketplace] Payment reminder failed:', error)), 30 * 60 * 1000);
 
   const refreshDashboard = () => {
     if (state.currentSection === 'dashboard') {

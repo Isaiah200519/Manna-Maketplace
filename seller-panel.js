@@ -1,5 +1,5 @@
 import { initStorage, clearStoredAuthState } from './storage.js';
-import { formatCurrency, formatDate, escapeHtml, createToast, getImageUrl, getSellerImageUrl, getCommunityOptions, isDateInRange } from './utils.js';
+import { formatCurrency, formatDate, escapeHtml, createToast, copyText, getImageUrl, getSellerImageUrl, getCommunityOptions, isDateInRange } from './utils.js';
 import { DEFAULT_CATEGORY_TAXONOMY, getCategoryDisplayName, getCategoryOptions } from './category-taxonomy.js';
 import { getQRCardHTML, initQRCode, bindQRDownloadHandlers } from './qr-utils.js';
 import { isAdminOnlyEmail } from './auth.js';
@@ -8,6 +8,7 @@ const state = {
     authUser: null,
     sellerId: null,
     sellerProfile: null,
+    adminWhatsAppNumber: '',
     userProfile: null,
     masterProducts: [],
     menuItems: [],
@@ -724,7 +725,7 @@ async function handleAuthStateChange(user) {
 }
 
 function cleanupListeners() {
-    [state.sellerDocUnsubscribe, state.deliveryUsersUnsubscribe, state.menuUnsubscribe, state.ordersUnsubscribe, state.reviewsUnsubscribe, state.promotionsUnsubscribe, state.couponsUnsubscribe, state.notificationsUnsubscribe, state.settingsUnsubscribe, state.chatsUnsubscribe, state.categoriesUnsubscribe, state.orderChatUnsubscribe].forEach((unsubscribe) => {
+    [state.sellerDocUnsubscribe, state.adminSettingsUnsubscribe, state.deliveryUsersUnsubscribe, state.menuUnsubscribe, state.ordersUnsubscribe, state.reviewsUnsubscribe, state.promotionsUnsubscribe, state.couponsUnsubscribe, state.notificationsUnsubscribe, state.settingsUnsubscribe, state.chatsUnsubscribe, state.categoriesUnsubscribe, state.orderChatUnsubscribe].forEach((unsubscribe) => {
         if (unsubscribe) unsubscribe();
     });
     Object.values(state.deliveryPartnersListeners || {}).forEach((unsubscribe) => {
@@ -732,6 +733,7 @@ function cleanupListeners() {
     });
     state.deliveryPartnersListeners = {};
     state.sellerDocUnsubscribe = null;
+    state.adminSettingsUnsubscribe = null;
     state.deliveryUsersUnsubscribe = null;
     state.menuUnsubscribe = null;
     state.ordersUnsubscribe = null;
@@ -758,6 +760,12 @@ function setupRealtimeListeners() {
         renderAll();
     }, (error) => {
         console.error('[Manna Marketplace] Seller profile listener failed:', error);
+    });
+    state.adminSettingsUnsubscribe = db.collection('adminSettings').doc('config').onSnapshot((doc) => {
+        state.adminWhatsAppNumber = doc.exists ? String(doc.data()?.adminWhatsAppNumber || '').trim() : '';
+        renderHelpSession();
+    }, (error) => {
+        console.error('[Manna Marketplace] Admin settings listener failed:', error);
     });
     state.categoriesUnsubscribe = db.collection('sellers').doc(state.sellerId).collection('categories').onSnapshot((snapshot) => {
         state.categories = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -819,6 +827,7 @@ function setupRealtimeListeners() {
     db.collection('deliveryPartnerRequests').where('sellerId', '==', state.sellerId).onSnapshot((snapshot) => {
         state.deliveryPartnerRequests = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         renderDeliveryPartnerRequests();
+        renderDeliveryPartners();
     }, (error) => {
         console.error('[Manna Marketplace] Seller delivery partner requests listener failed:', error);
     });
@@ -1145,6 +1154,7 @@ function renderMenu() {
             <div>${formatCurrency(item.price || 0)}</div>
             <label><input type="checkbox" data-toggle-availability="${item.id}" ${item.availability ? 'checked' : ''} /> Available</label>
             <button class="ghost-btn" data-edit-menu="${item.id}">Edit</button>
+            <button class="ghost-btn" data-share-menu="${item.id}">Share link</button>
           </div>`).join('')}
     </div>` : '<div class="empty-state">Your store is empty.</div>';
     } else {
@@ -1159,6 +1169,7 @@ function renderMenu() {
         <div class="modal-actions">
           <label class="badge"><input type="checkbox" data-toggle-availability="${item.id}" ${item.availability ? 'checked' : ''} /> Available</label>
           <button class="ghost-btn" data-edit-menu="${item.id}">Edit</button>
+          <button class="ghost-btn" data-share-menu="${item.id}">Share link</button>
         </div>
     </div>`).join('') : '<div class="empty-state">Your store is empty.</div>';
     }
@@ -1168,6 +1179,9 @@ function renderMenu() {
     document.querySelectorAll('[data-edit-menu]').forEach((button) => {
         button.addEventListener('click', () => openMenuEditor(button.dataset.editMenu));
     });
+    document.querySelectorAll('[data-share-menu]').forEach((button) => {
+        button.addEventListener('click', () => shareMenuItem(button.dataset.shareMenu));
+    });
     document.querySelectorAll('[data-select-menu]').forEach((checkbox) => {
         checkbox.addEventListener('change', (event) => {
             if (event.target.checked) state.selectedMenuIds.add(event.target.dataset.selectMenu);
@@ -1176,11 +1190,26 @@ function renderMenu() {
     });
 }
 
+function getMenuItemShareUrl(menuId) {
+    const shareUrl = new URL('./', window.location.href);
+    shareUrl.searchParams.set('sellerId', state.sellerId);
+    shareUrl.searchParams.set('productId', menuId);
+    return shareUrl.href;
+}
+
+async function shareMenuItem(menuId) {
+    const item = state.menuItems.find((entry) => entry.id === menuId);
+    if (!item || !state.sellerId) return;
+    const copied = await copyText(getMenuItemShareUrl(menuId));
+    createToast(copied ? 'Product checkout link copied.' : 'Unable to copy the product link.', copied ? 'success' : 'error');
+}
+
 function renderOrders() {
-    const filtered = state.orders.filter((order) => !order.isDeleted && (state.orderFilter === 'all' || order.status === state.orderFilter));
+    const filtered = state.orders.filter((order) => !order.isDeleted && order.paymentStatus === 'confirmed' && (state.orderFilter === 'all' || order.status === state.orderFilter));
     document.getElementById('ordersList').innerHTML = filtered.length ? filtered.map((order) => {
         const currentStatus = order.status || 'pending';
         const shouldDisableActions = Boolean(order.archived);
+        const isReceived = currentStatus === 'received';
         const acceptButtonClass = currentStatus === 'pending' && !shouldDisableActions ? 'primary-btn is-active' : 'ghost-btn';
         const rejectButtonClass = ['pending', 'accepted', 'preparing'].includes(currentStatus) && !shouldDisableActions ? 'ghost-btn' : 'ghost-btn';
         const prepareButtonClass = ['accepted', 'preparing'].includes(currentStatus) && !shouldDisableActions ? 'primary-btn is-active' : 'ghost-btn';
@@ -1189,7 +1218,6 @@ function renderOrders() {
         const rejectDisabled = ['cancelled', 'delivered', 'received'].includes(currentStatus) || shouldDisableActions;
         const prepareDisabled = !['accepted', 'preparing'].includes(currentStatus) || shouldDisableActions;
         const readyDisabled = !['preparing', 'ready'].includes(currentStatus) || shouldDisableActions;
-        const canDelete = ['received', 'refunded'].includes(currentStatus);
         return `
     <div class="list-item ${shouldDisableActions ? 'archived-order-card' : ''}">
       <div class="panel-card-header">
@@ -1199,9 +1227,10 @@ function renderOrders() {
       <div class="muted">${formatCurrency(order.total || 0)} • ${order.address || 'No address provided'}</div>
       ${order.items?.length ? `<img src="${getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || '')}" alt="${order.items[0]?.name || 'Item'}" style="width:64px;height:64px;object-fit:cover;border-radius:12px;margin-top:8px;" onerror="this.src='./images/placeholder.png'" />` : ''}
       <div class="muted">Delivery: ${order.deliveryLocationLabel || 'Standard'} • ${order.deliveryLandmark || order.deliveryDetails || 'No landmark provided'}</div>
-      <div class="muted">Payment: ${order.paymentMethod || 'pending'} • Phone: ${order.paymentPhone || order.customerPhone || '—'} • ETA: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div>
+    <div class="muted">Payment: ${order.paymentMethod || 'pending'} • Phone: ${order.paymentPhone || order.customerPhone || '—'} • Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div>
       <div class="muted">Partner: ${order.deliveryPersonName || (order.deliveryPersonUid ? 'Assigned delivery person' : 'Awaiting assignment')} • Refund: ${order.refundStatus || 'none'}${order.refundRequested ? ' • requested by customer' : ''}</div>
       <div class="modal-actions">
+                ${isReceived ? `<button class="ghost-btn" data-open-order-chat="${order.id}">Chat</button>` : `
         <button class="${acceptButtonClass}" data-order-action="accept" data-order-id="${order.id}" ${acceptDisabled ? 'disabled' : ''}>Accept</button>
         <button class="${rejectButtonClass}" data-order-action="reject" data-order-id="${order.id}" ${rejectDisabled ? 'disabled' : ''}>Reject</button>
         <button class="${prepareButtonClass}" data-order-action="prepare" data-order-id="${order.id}" ${prepareDisabled ? 'disabled' : ''}>Prepare</button>
@@ -1209,7 +1238,7 @@ function renderOrders() {
         ${order.refundStatus === 'requested' ? `<button class="ghost-btn" data-order-action="approve-refund" data-order-id="${order.id}">Approve Refund</button><button class="ghost-btn" data-order-action="reject-refund" data-order-id="${order.id}">Reject Refund</button>` : ''}
         <button class="ghost-btn" data-order-action="details" data-order-id="${order.id}">Details</button>
         <button class="ghost-btn" data-open-order-chat="${order.id}">Chat</button>
-        ${canDelete ? `<button class="danger-btn" data-delete-order="${order.id}">Delete</button>` : ''}
+        `}
       </div>
     </div>`;
     }).join('') : '<div class="empty-state">No orders found.</div>';
@@ -1219,24 +1248,6 @@ function renderOrders() {
     document.querySelectorAll('[data-open-order-chat]').forEach((button) => {
         button.addEventListener('click', () => openOrderChat(button.dataset.openOrderChat));
     });
-    document.querySelectorAll('[data-delete-order]').forEach((button) => {
-        button.addEventListener('click', () => deleteOrderFromUI(button.dataset.deleteOrder));
-    });
-}
-
-async function deleteOrderFromUI(orderId) {
-    const order = state.orders.find((entry) => entry.id === orderId);
-    if (!order || !['received', 'refunded'].includes(order.status)) return;
-    const confirmed = window.confirm('Are you sure you want to permanently delete this order? This action cannot be undone.');
-    if (!confirmed) return;
-    try {
-        await db.collection('orders').doc(orderId).set({ isDeleted: true, updatedAt: new Date() }, { merge: true });
-        state.orders = state.orders.filter((entry) => entry.id !== orderId);
-        renderOrders();
-        createToast('Order deleted.', 'success');
-    } catch (error) {
-        createToast(error.message || 'Unable to delete the order.', 'error');
-    }
 }
 
 function renderReviews() {
@@ -1368,7 +1379,8 @@ function renderProfileForm() {
     const profile = state.sellerProfile || {};
     const selectedCategory = String(profile.category || '').trim().toLowerCase();
     const categoryOptions = getCategoryOptions().map((category) => `<option value="${escapeHtml(category.name)}" ${selectedCategory === category.id.toLowerCase() || selectedCategory === category.name.toLowerCase() ? 'selected' : ''}>${escapeHtml(category.name)} (${escapeHtml(category.group)})</option>`).join('');
-    const deliveryUsersOptions = state.deliveryUsers.length ? state.deliveryUsers.map((user) => `<option value="${user.uid || user.id}">${user.displayName || user.email || 'Delivery person'}</option>`).join('') : '<option value="">No delivery people available yet</option>';
+    const availableDeliveryUsers = state.deliveryUsers.filter((user) => user.status === 'approved' && user.isActive !== false);
+    const deliveryUsersOptions = availableDeliveryUsers.length ? availableDeliveryUsers.map((user) => `<option value="${user.uid || user.id}">${user.displayName || user.email || 'Delivery person'}</option>`).join('') : '<option value="">No delivery people available yet</option>';
     const sellerDeliveryUids = Array.from(new Set([
         ...(profile.deliveryPersons || []),
         ...(state.deliveryUsers || [])
@@ -1387,6 +1399,9 @@ function renderProfileForm() {
     <label>Mobile money receiver<input name="mobileMoneyNumber" type="tel" value="${profile.mobileMoneyNumber || ''}" /></label>
     <label>Orange Money Phone Number<input name="orangeMoneyNumber" type="tel" value="${profile.orangeMoneyNumber || ''}" /></label>
     <label>Lonestar Cell Phone Number<input name="lonestarMoneyNumber" type="tel" value="${profile.lonestarMoneyNumber || ''}" /></label>
+    <label>Facebook URL<input name="facebookUrl" type="url" value="${profile.facebookUrl || ''}" placeholder="https://facebook.com/your-page" /></label>
+    <label>Instagram URL<input name="instagramUrl" type="url" value="${profile.instagramUrl || ''}" placeholder="https://instagram.com/your-page" /></label>
+    <label>YouTube URL<input name="youtubeUrl" type="url" value="${profile.youtubeUrl || ''}" placeholder="https://youtube.com/@your-channel" /></label>
     <label>Email<input name="email" value="${profile.email || state.authUser?.email || ''}" /></label>
     <label>Address<input name="address" value="${profile.address || ''}" /></label>
     <label>City<input name="city" value="${profile.city || ''}" /></label>
@@ -1469,6 +1484,7 @@ function renderSettingsForm() {
     <label>Minimum Order Value<input name="minimumOrderValue" type="number" value="${settings.minimumOrderValue || 0}" /></label>
     <label>Prep Time<input name="estimatedPrepTime" type="number" value="${settings.estimatedPrepTime || 20}" /></label>
     <label><input type="checkbox" name="vacationMode" ${settings.vacationMode ? 'checked' : ''} /> Vacation Mode</label>
+    <label><input type="checkbox" name="breakMode" ${state.sellerProfile?.isActive === false ? 'checked' : ''} /> Break Mode</label>
     <label><input type="checkbox" name="acceptOrders" ${settings.acceptOrders !== false ? 'checked' : ''} /> Accept Orders</label>
     <label><input type="checkbox" name="autoAccept" ${settings.autoAccept ? 'checked' : ''} /> Auto Accept</label>
   `;
@@ -1717,6 +1733,7 @@ function renderHelpSession() {
         <h4>Need help?</h4>
         <span class="badge">Send a suggestion to Manna Marketplace</span>
       </div>
+            ${state.adminWhatsAppNumber ? `<div class="action-row"><a class="primary-btn" href="https://wa.me/${String(state.adminWhatsAppNumber).replace(/[^\d]/g, '')}?text=${encodeURIComponent(`Hello Manna Marketplace admin, I need help with my seller account.`)}" target="_blank" rel="noopener noreferrer">Contact admin on WhatsApp</a></div>` : '<div class="muted">Admin WhatsApp support is not configured yet.</div>'}
       <form id="helpRequestForm" class="form-grid">
         <label>Topic<select name="category">
           <option value="account">Account</option>
@@ -1848,7 +1865,7 @@ function renderDeliveryPartners() {
     });
 
     const allUsers = (state.deliveryUsers || [])
-        .filter((user) => user && (user.role || '').toLowerCase() === 'delivery_person')
+        .filter((user) => user && (user.role || '').toLowerCase() === 'delivery_person' && user.status === 'approved' && user.isActive !== false)
         .sort((a, b) => (a.displayName || a.name || a.email || '').localeCompare(b.displayName || b.name || b.email || ''));
 
     const approvedUsers = allUsers.filter((user) => (user.approvedSellers || []).includes(state.sellerId));
@@ -1872,8 +1889,10 @@ function renderDeliveryPartners() {
         const name = user.displayName || user.name || user.email || 'Delivery person';
         const phone = user.phone || user.mobileNumber || 'No phone provided';
         const email = user.email || 'Not provided';
-        const location = user.area || user.location || 'Location not set';
+        const location = user.address || [user.area, user.city, user.county].filter(Boolean).join(', ') || user.location || 'Location not set';
         const isApproved = (user.approvedSellers || []).includes(state.sellerId);
+        const deliveryPersonId = user.id || user.uid || '';
+        const hasPendingInvitation = (state.deliveryPartnerRequests || []).some((request) => request.deliveryPersonUid === deliveryPersonId && request.status === 'pending');
         return `
         <div class="list-item">
           <div class="panel-card-header">
@@ -1884,7 +1903,7 @@ function renderDeliveryPartners() {
           <div class="muted">Email: ${escapeHtml(email)}</div>
           <div class="muted">Area: ${escapeHtml(location)}</div>
           <div class="action-row">
-            ${isApproved ? `<button class="ghost-btn" data-delivery-partner-action="remove" data-delivery-partner-id="${escapeHtml(user.id || user.uid || '')}">Remove</button>` : `<button class="primary-btn" data-delivery-partner-action="invite" data-delivery-partner-id="${escapeHtml(user.id || user.uid || '')}">Invite</button>`}
+                        ${isApproved ? `<button class="primary-btn" type="button" disabled>Assigned Partner</button><button class="ghost-btn" data-delivery-partner-action="remove" data-delivery-partner-id="${escapeHtml(deliveryPersonId)}">Unassign</button>` : `<button class="primary-btn" data-delivery-partner-action="invite" data-delivery-partner-id="${escapeHtml(deliveryPersonId)}" ${hasPendingInvitation ? 'disabled' : ''}>${hasPendingInvitation ? 'Invitation sent' : 'Invite'}</button>`}
           </div>
         </div>`;
     };
@@ -1944,11 +1963,14 @@ function renderDeliveryPartners() {
         renderDeliveryPartners();
     });
     document.querySelectorAll('[data-delivery-partner-action]').forEach((button) => {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', async () => {
             const action = button.getAttribute('data-delivery-partner-action');
             const deliveryPersonId = button.getAttribute('data-delivery-partner-id');
             if (action === 'invite') {
-                handleDeliveryPartnerInvite(deliveryPersonId);
+                button.disabled = true;
+                button.textContent = 'Invitation sent';
+                const sent = await handleDeliveryPartnerInvite(deliveryPersonId);
+                if (!sent) renderDeliveryPartners();
             } else if (action === 'remove') {
                 openRemoveDeliveryPartnerConfirm(deliveryPersonId);
             }
@@ -2068,8 +2090,10 @@ async function handleDeliveryPartnerInvite(deliveryPersonId) {
             updatedAt: new Date()
         });
         createToast('Invite sent to the delivery person.', 'success');
+        return true;
     } catch (error) {
         createToast(error.message || 'Unable to send the invite.', 'error');
+        return false;
     }
 }
 
@@ -2183,6 +2207,9 @@ async function saveProfile(event) {
     const mobileMoneyNumber = String(data.mobileMoneyNumber || '').trim();
     const orangeMoneyNumber = String(data.orangeMoneyNumber || '').trim();
     const lonestarMoneyNumber = String(data.lonestarMoneyNumber || '').trim();
+    const facebookUrl = String(data.facebookUrl || '').trim();
+    const instagramUrl = String(data.instagramUrl || '').trim();
+    const youtubeUrl = String(data.youtubeUrl || '').trim();
 
     if (!category) {
         createToast('Please choose a marketplace category for your seller profile.', 'warning');
@@ -2196,6 +2223,9 @@ async function saveProfile(event) {
         mobileMoneyNumber: mobileMoneyNumber || orangeMoneyNumber || '',
         orangeMoneyNumber,
         lonestarMoneyNumber,
+        facebookUrl,
+        instagramUrl,
+        youtubeUrl,
         acceptedPaymentMethods: state.sellerProfile?.acceptedPaymentMethods || ['mobile_money', 'cash'],
         email: data.email,
         address: data.address,
@@ -2239,12 +2269,18 @@ async function saveSettings(event) {
         minimumOrderValue: Number(data.minimumOrderValue || 0),
         estimatedPrepTime: Number(data.estimatedPrepTime || 0),
         vacationMode: Boolean(data.vacationMode),
+        breakMode: Boolean(data.breakMode),
         acceptOrders: Boolean(data.acceptOrders),
         autoAccept: Boolean(data.autoAccept),
         updatedAt: new Date()
     };
-    await db.collection('sellers').doc(state.sellerId).collection('settings').doc('store').set(payload, { merge: true });
+    await Promise.all([
+        db.collection('sellers').doc(state.sellerId).collection('settings').doc('store').set(payload, { merge: true }),
+        db.collection('sellers').doc(state.sellerId).set({ isActive: !payload.breakMode, updatedAt: new Date() }, { merge: true })
+    ]);
     state.settings = payload;
+    state.sellerProfile = { ...state.sellerProfile, isActive: !payload.breakMode };
+    updateApprovalGate();
     createToast('Settings saved', 'success');
 }
 
@@ -2330,8 +2366,10 @@ async function openMenuEditor(menuId) {
     </form>`;
     modalActions.innerHTML = `
     <button class="ghost-btn" id="cancelEditor">Cancel</button>
+    <button class="ghost-btn" id="shareEditorLink">Share link</button>
     <button class="primary-btn" id="saveEditor">Save</button>`;
     modalBackdrop.classList.remove('hidden');
+    document.getElementById('shareEditorLink')?.addEventListener('click', () => shareMenuItem(menuId));
     const saveButton = document.getElementById('saveEditor');
     saveButton?.addEventListener('click', async () => {
         const form = document.getElementById('menuEditorForm');
@@ -2538,6 +2576,11 @@ async function handleOrderAction(action, orderId) {
     const orderRef = db.collection('orders').doc(orderId);
     const orderDoc = await orderRef.get();
     const currentOrder = orderDoc.data() || {};
+    if (['accept', 'prepare', 'ready'].includes(action) && currentOrder.paymentStatus !== 'confirmed') {
+        createToast('This order is waiting for admin payment confirmation.', 'warning');
+        return;
+    }
+    if (currentOrder.status === 'received') return;
     const nextStatus = {
         accept: 'accepted',
         reject: 'cancelled',
@@ -2550,20 +2593,35 @@ async function handleOrderAction(action, orderId) {
     }
     if (!nextStatus) {
         if (action === 'approve-refund') {
+            const refundPhone = String(currentOrder.paymentPhone || '').trim();
+            const refundMethod = String(currentOrder.paymentMethod || '').trim();
+            const refundAmount = Number(currentOrder.refundAmount || currentOrder.total || 0);
+            if (!refundPhone || !refundMethod || !refundAmount) {
+                createToast('This order is missing the customer payment details needed for repayment.', 'warning');
+                return;
+            }
+            const paymentReference = window.prompt(`Send ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}, then enter the payment reference:`, '');
+            if (!paymentReference || !paymentReference.trim()) {
+                createToast('Enter the mobile payment reference after sending the refund.', 'warning');
+                return;
+            }
             await orderRef.update({
                 status: 'refund_approved',
                 refundStatus: 'approved',
-                refundAmount: Number(currentOrder.refundAmount || currentOrder.total || 0),
+                refundAmount,
+                refundPaymentMethod: refundMethod,
+                refundPaymentPhone: refundPhone,
+                refundPaymentReference: paymentReference.trim(),
                 refundProcessedAt: new Date(),
                 refundConfirmedAt: null,
                 updatedAt: new Date()
             });
             if (currentOrder.customerUid) {
-                await createNotification(currentOrder.customerUid, 'Refund approved', `Refund for order #${currentOrder.orderNumber || orderId.slice(0, 6)} was approved. Please confirm you received it.`, 'refund');
+                await createNotification(currentOrder.customerUid, 'Refund sent for confirmation', `The seller sent ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}. Check your phone or mobile-money account, then confirm receipt for order #${currentOrder.orderNumber || orderId.slice(0, 6)}. Reference: ${paymentReference.trim()}`, 'refund');
             }
             await loadOrders();
             renderOrders();
-            createToast('Refund approved.', 'success');
+            createToast('Refund repayment recorded and sent for customer confirmation.', 'success');
             return;
         }
         if (action === 'reject-refund') {
@@ -2695,7 +2753,8 @@ function openOrderDetails(order) {
       </div>
       <div><strong>Payment</strong>: ${order.paymentMethod || 'pending'} • ${order.paymentDetails || 'N/A'}</div>
       <div><strong>Total</strong>: ${formatCurrency(order.total || 0)}</div>
-      <div><strong>ETA</strong>: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div>
+    <div><strong>Placed</strong>: ${formatDate(order.placedAt || order.createdAt)}</div>
+    <div><strong>Estimated delivery</strong>: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div>
       <div><strong>Refund</strong>: ${order.refundStatus || 'none'}</div>
     </div>`;
     modalActions.innerHTML = `<button class="ghost-btn" id="closeDetails">Close</button>`;

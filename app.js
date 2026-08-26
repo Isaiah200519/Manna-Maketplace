@@ -128,7 +128,10 @@ window.addEventListener('DOMContentLoaded', () => {
     tryShowIosPrompt();
     setupAuthRouter({
         onRoleResolved: (role) => {
-            window.location.replace(resolvePanel(role));
+            const panelUrl = new URL(resolvePanel(role), window.location.href);
+            panelUrl.search = window.location.search;
+            panelUrl.hash = window.location.hash;
+            window.location.replace(panelUrl.href);
         }
     });
 

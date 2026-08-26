@@ -6,13 +6,17 @@ Manna Marketplace is a multi-category e-commerce platform for discovering produc
 
 Open the deployed application at:
 
-<https://isaiah200519.github.io/Manna%20Marketplace/>
+<https://isaiah200519.github.io/Manna-Maketplace/>
 
 ## Marketplace Concept
 
 Customers can browse products across categories such as electronics, fashion, home and living, health and beauty, automotive, and packaged foods and drinks. Sellers choose their marketplace category, add products to their store, set pricing and availability, provide payment details, and optionally attach product video links. Customers can open those videos directly from product cards, add products to checkout, select a delivery location, and place orders.
 
-The platform is designed to support shareable product checkout links. A future product link can carry a product ID and seller ID so an authenticated customer can open the marketplace with the correct seller and product preselected for checkout. Unauthenticated visitors should be routed through login before continuing. The current repository does not yet implement URL-parameter product prefill; this README records that as the next shareable-checkout capability rather than describing it as already live.
+The platform supports shareable product checkout links. Sellers can copy a link from their Store product cards or the product editor. Each link carries both IDs, for example:
+
+`https://isaiah200519.github.io/Manna-Maketplace/?sellerId=SELLER_ID&productId=PRODUCT_ID`
+
+When a customer opens the link, the app verifies that the seller and available product exist, then pre-fills checkout with that product. Unauthenticated visitors complete login first, and the link parameters are preserved during the role redirect.
 
 ## Panels
 

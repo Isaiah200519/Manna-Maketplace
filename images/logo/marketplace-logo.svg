@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-labelledby="title desc">
+  <title id="title">Manna Marketplace</title>
+  <desc id="desc">A connected marketplace storefront mark in orange, cream, and dark charcoal.</desc>
+  <rect width="200" height="200" rx="44" fill="#171717"/>
+  <path d="M42 78 100 42l58 36v68a12 12 0 0 1-12 12H54a12 12 0 0 1-12-12V78Z" fill="#FFF2E8"/>
+  <path d="m34 82 66-42 66 42-8 14-58-37-58 37-8-14Z" fill="#F97316"/>
+  <path d="M62 92h76v54H62z" fill="#171717"/>
+  <path d="M75 146V108h25v38M112 146v-25h14v25" fill="#F97316"/>
+  <circle cx="58" cy="82" r="13" fill="#FFB347"/>
+  <circle cx="100" cy="55" r="13" fill="#F97316" stroke="#FFF2E8" stroke-width="6"/>
+  <circle cx="142" cy="82" r="13" fill="#FFB347"/>
+  <path d="M67 75 89 61M111 61l22 14" stroke="#FFF2E8" stroke-width="7" stroke-linecap="round"/>
+  <path d="M52 164h96" stroke="#FFB347" stroke-width="10" stroke-linecap="round"/>
+</svg>

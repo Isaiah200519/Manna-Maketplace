@@ -35,6 +35,8 @@ const state = {
     filters: { category: 'all', sort: 'rating', community: '' },
     orderFilter: 'all',
     deliveryFee: 60,
+    deliveryOptions: { regularFee: 60, expressFee: 120, regularDays: 3, expressHours: 24 },
+    platformPaymentNumbers: { orangeMoneyNumber: '', lonestarMoneyNumber: '' },
     notifications: [],
     helpArticles: []
 };
@@ -85,6 +87,40 @@ function clearAuthBootstrapTimer() {
     }
 }
 
+function getWhatsAppUrl(phone, message) {
+    const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
+    return normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(message || '')}` : '';
+}
+
+function getWhatsAppIcon() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l1.4-3.2A7.7 7.7 0 1 1 8 17.7L5 19z"/><path d="M9.2 8.8c.2-.4.4-.4.7-.4h.5c.2 0 .4.1.5.4l.6 1.4c.1.2.1.4-.1.6l-.5.6c.5 1 1.3 1.7 2.3 2.2l.6-.5c.2-.2.4-.2.6-.1l1.4.6c.3.1.4.3.3.6-.2.8-.8 1.3-1.6 1.3-2.1-.1-5.9-3.3-6.3-5.7-.1-.4.2-.8.5-1z"/></svg>';
+}
+
+function getVideoIcon() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>';
+}
+
+function getSocialUrl(value) {
+    const url = String(value || '').trim();
+    return /^https?:\/\//i.test(url) ? url : '';
+}
+
+function getSocialIcon(type) {
+    const icons = {
+        facebook: '<path d="M14 8h3V5h-3c-2.2 0-4 1.8-4 4v2H7v3h3v5h3v-5h3l1-3h-4V9c0-.6.4-1 1-1z"/>',
+        instagram: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none"/>',
+        youtube: '<rect x="3" y="6" width="18" height="12" rx="3"/><path d="m10 9 5 3-5 3z"/>'
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[type] || ''}</svg>`;
+}
+
+function getSellerSocialLinks(seller) {
+    return ['facebook', 'instagram', 'youtube'].map((type) => {
+        const url = getSocialUrl(seller?.[`${type}Url`]);
+        return url ? `<a class="contact-icon-link social-icon-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="${type} seller" title="${type} seller">${getSocialIcon(type)}</a>` : '';
+    }).join('');
+}
+
 function scheduleAuthFallback() {
     clearAuthBootstrapTimer();
     authBootstrapTimer = window.setTimeout(() => {
@@ -116,6 +152,7 @@ function normalizeCartState(cart = {}) {
         notes: cart.notes || '',
         deliveryFee: Number(cart.deliveryFee || state.deliveryFee || 60),
         selectedLocationId: cart.selectedLocationId || '',
+        deliveryOption: cart.deliveryOption || 'regular',
         sellerPaymentReceiver: cart.sellerPaymentReceiver || '',
         sellerAcceptedPaymentMethods: Array.isArray(cart.sellerAcceptedPaymentMethods) ? cart.sellerAcceptedPaymentMethods : []
     };
@@ -788,13 +825,64 @@ async function loadCustomerData() {
     renderAll();
     await hydrateCartFromStorage();
     showSection('home');
+    await resolveSharedProductLink();
+}
+
+async function resolveSharedProductLink() {
+    const params = new URLSearchParams(window.location.search);
+    const sellerId = String(params.get('sellerId') || '').trim();
+    const productId = String(params.get('productId') || '').trim();
+    if (!sellerId || !productId) return;
+
+    let product = state.menuItems.find((item) => item.id === productId && item.sellerId === sellerId);
+    if (!product) {
+        const sellerSnapshot = await db.collection('sellers').doc(sellerId).get();
+        const productSnapshot = await db.collection('sellers').doc(sellerId).collection('menu').doc(productId).get();
+        const sellerData = sellerSnapshot.exists ? sellerSnapshot.data() || {} : {};
+        const productData = productSnapshot.exists ? productSnapshot.data() || {} : {};
+        const isAvailable = productData.isAvailable ?? productData.availability ?? false;
+        if (sellerSnapshot.exists && productSnapshot.exists && sellerData.status === 'approved' && sellerData.isActive !== false && isAvailable) {
+            product = {
+                id: productSnapshot.id,
+                sellerId,
+                ...productData,
+                sellerName: sellerData.name || sellerData.businessName || 'Seller',
+                isAvailable: true
+            };
+            state.menuItems.push(product);
+            if (!state.sellers.some((seller) => seller.id === sellerId)) {
+                state.sellers.push({ id: sellerId, ...sellerData });
+            }
+        }
+    }
+    if (!product) {
+        createToast('This shared product is unavailable or no longer listed.', 'warning');
+        return;
+    }
+
+    await addToCart(productId);
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('sellerId');
+    cleanUrl.searchParams.delete('productId');
+    window.history.replaceState({}, document.title, cleanUrl.href);
+    createToast(`${product.name} is ready for checkout.`, 'success');
 }
 
 async function loadPlatformSettings() {
     try {
         const snapshot = await db.collection('settings').doc('platform').get();
         const data = snapshot.exists ? snapshot.data() : {};
-        state.deliveryFee = Number(data.deliveryFee || data.defaultDeliveryFee || 60);
+        state.deliveryOptions = {
+            regularFee: Number(data.regularDeliveryFee || data.deliveryFee || 60),
+            expressFee: Number(data.expressDeliveryFee || 120),
+            regularDays: Number(data.regularDeliveryDays || 3),
+            expressHours: Number(data.expressDeliveryHours || 24)
+        };
+        state.deliveryFee = state.deliveryOptions.regularFee;
+        state.platformPaymentNumbers = {
+            orangeMoneyNumber: String(data.adminOrangeMoneyNumber || data.orangeMoneyNumber || '').trim(),
+            lonestarMoneyNumber: String(data.adminLonestarMoneyNumber || data.lonestarMoneyNumber || '').trim()
+        };
     } catch (error) {
         console.error(error);
     }
@@ -941,12 +1029,13 @@ function renderHome() {
 
     document.getElementById('homeContent').innerHTML = `${renderedProducts.length ? renderedProducts.map((item) => {
         const seller = state.sellers.find((entry) => entry.id === item.sellerId);
+        const sellerWhatsAppUrl = getWhatsAppUrl(seller?.whatsappNumber || seller?.phone, `Hello ${seller?.name || item.sellerName || 'seller'}, I would like to ask about ${item.name} before buying.`);
         const isFavorite = isFavoriteMenuItem(item.id);
         const isNearby = item.distance !== null && item.distance !== undefined && Number.isFinite(item.distance);
         const distanceLabel = formatDistanceLabel(item.distance);
         return `
           <div class="item-card">
-            <img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" />
+            <a href="${getImageUrl(item.imageFilename || item.image || '')}" target="_blank" rel="noopener noreferrer" title="Open image"><img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" /></a>
             <div class="panel-card-header">
               <strong>${item.name}</strong>
               <div class="product-card-meta">
@@ -957,10 +1046,14 @@ function renderHome() {
             </div>
             <div class="muted card-description">${item.sellerDescription || item.description || 'Freshly prepared and ready for your order.'}</div>
             <div class="muted">${seller?.name || item.sellerName || 'Seller'}</div>
-            <div class="modal-actions">
-              <button class="primary-btn" data-add-order="${item.id}">Buy</button>
-                              ${getProductVideoUrl(item) ? `<a class="ghost-btn" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer">Watch video</a>` : ''}
-              <button class="${getFavoriteButtonClass(isFavorite)}" data-favorite-item="${item.id}" aria-pressed="${isFavorite ? 'true' : 'false'}">${getFavoriteIcon(isFavorite)}</button>
+                        <div class="modal-actions">
+                              <button class="primary-btn buy-action" data-add-order="${item.id}">Buy</button>
+                            <button class="${getFavoriteButtonClass(isFavorite)}" data-favorite-item="${item.id}" aria-pressed="${isFavorite ? 'true' : 'false'}">${getFavoriteIcon(isFavorite)}</button>
+                        </div>
+                        <div class="modal-actions contact-actions">
+                            ${sellerWhatsAppUrl ? `<a class="contact-icon-link" href="${sellerWhatsAppUrl}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp seller" title="WhatsApp seller">${getWhatsAppIcon()}</a>` : ''}
+                            ${getProductVideoUrl(item) ? `<a class="contact-icon-link watch-video-button" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer" aria-label="Watch video" title="Watch video">${getVideoIcon()}</a>` : ''}
+                            ${getSellerSocialLinks(seller)}
             </div>
           </div>`;
     }).join('') : '<div class="empty-state">No dishes are available right now.</div>'}`;
@@ -1035,6 +1128,8 @@ function renderSellers() {
       ${seller.community || seller.district || seller.county ? `<div class="muted">📍 ${escapeHtml([seller.community, seller.district, seller.county].filter(Boolean).join(' • '))}</div>` : ''}
       <div class="modal-actions">
         <button class="primary-btn" data-open-seller="${seller.id}">View Menu</button>
+                ${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about your products before buying.`) ? `<a class="contact-icon-link" href="${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about your products before buying.`)}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp seller" title="WhatsApp seller">${getWhatsAppIcon()}</a>` : ''}
+                ${getSellerSocialLinks(seller)}
         <button class="${getFavoriteButtonClass(isFavoriteSeller(seller.id))}" data-favorite-seller="${seller.id}" aria-pressed="${isFavoriteSeller(seller.id) ? 'true' : 'false'}">${getFavoriteIcon(isFavoriteSeller(seller.id))}</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No sellers match your filters.</div>';
@@ -1053,17 +1148,23 @@ async function openSeller(sellerId) {
       <div class="panel-card-header">
         <div><h3>${seller.name}</h3><p class="muted">${seller.description || ''}</p></div>
         <button class="ghost-btn" data-section="sellers">Back</button>
+        ${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about your products before buying.`) ? `<a class="contact-icon-link" href="${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about your products before buying.`)}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp seller" title="WhatsApp seller">${getWhatsAppIcon()}</a>` : ''}
+                ${getSellerSocialLinks(seller)}
       </div>
       <div class="card-grid">
         ${menuItems.length ? menuItems.map((item) => `
           <div class="item-card">
-            <img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" />
+            <a href="${getImageUrl(item.imageFilename || item.image || '')}" target="_blank" rel="noopener noreferrer" title="Open image"><img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" /></a>
             <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0)}</span></div>
             <div class="muted card-description">${item.sellerDescription || 'Freshly prepared and ready to order.'}</div>
-            <div class="modal-actions">
-              <button class="primary-btn" data-add-order="${item.id}">Add to cart</button>
-                              ${getProductVideoUrl(item) ? `<a class="ghost-btn" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer">Watch video</a>` : ''}
-              <button class="ghost-btn" data-favorite-item="${item.id}">♡</button>
+                        <div class="modal-actions">
+                              <button class="primary-btn buy-action" data-add-order="${item.id}">Add to cart</button>
+                            <button class="ghost-btn" data-favorite-item="${item.id}">♡</button>
+                        </div>
+                        <div class="modal-actions contact-actions">
+                            ${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about ${item.name} before buying.`) ? `<a class="contact-icon-link" href="${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about ${item.name} before buying.`)}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp seller" title="WhatsApp seller">${getWhatsAppIcon()}</a>` : ''}
+                            ${getProductVideoUrl(item) ? `<a class="contact-icon-link watch-video-button" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer" aria-label="Watch video" title="Watch video">${getVideoIcon()}</a>` : ''}
+                            ${getSellerSocialLinks(seller)}
             </div>
           </div>`).join('') : '<div class="empty-state">No dishes available yet.</div>'}
       </div>
@@ -1075,7 +1176,7 @@ async function openSeller(sellerId) {
 
 function renderOrders() {
     const filtered = state.orders.filter((order) => {
-        if (order.isDeleted) return false;
+        if (order.isDeleted || order.customerDeletedAt) return false;
         if (state.orderFilter === 'active') return ['pending', 'accepted', 'preparing', 'ready', 'picked_up', 'out_for_delivery', 'refund_requested'].includes(order.status);
         if (state.orderFilter === 'past') return ['delivered', 'completed', 'received'].includes(order.status);
         if (state.orderFilter === 'cancelled') return order.status === 'cancelled' || order.refundStatus === 'approved';
@@ -1083,19 +1184,20 @@ function renderOrders() {
     });
     document.getElementById('ordersList').innerHTML = filtered.length ? filtered.map((order) => {
         const isArchived = Boolean(order.archived);
-        const canDelete = ['received', 'refunded'].includes(order.status);
+        const canDelete = order.status === 'received';
         const actionsDisabled = isArchived || ['received', 'refunded'].includes(order.status);
+        const isReceived = order.status === 'received';
         return `
     <div class="item-card ${isArchived ? 'archived-order-card' : ''}">
       ${order.items?.length ? `<img src="${getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || '')}" alt="${order.items[0]?.name || 'Item'}" onerror="this.src='./images/placeholder.png'" />` : ''}
       <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status}</span></div>
       <div class="muted">${formatCurrency(order.total || 0)} • ${order.sellerName || 'Seller'}</div>
-      <div class="muted">ETA: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
+    <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
+    ${order.refundStatus === 'approved' && !order.refundConfirmedAt ? `<div class="refund-confirmation-note">Refund sent: ${formatCurrency(order.refundAmount || 0)} to ${escapeHtml(order.refundPaymentPhone || order.paymentPhone || 'your payment number')} via ${escapeHtml(order.refundPaymentMethod || order.paymentMethod || 'your payment method')}. Reference: ${escapeHtml(order.refundPaymentReference || 'Not provided')}<br />Check your phone or mobile-money account before confirming receipt.</div>` : ''}
       <div class="modal-actions">
-        <button class="ghost-btn" data-track-order="${order.id}" ${actionsDisabled ? 'disabled' : ''}>Track</button>
-        <button class="ghost-btn" data-repeat-order="${order.id}" ${actionsDisabled ? 'disabled' : ''}>Repeat</button>
-        <button class="ghost-btn" data-request-refund="${order.id}" ${canRequestRefund(order) && !isArchived ? '' : 'disabled'}>${getRefundButtonLabel(order)}</button>
-        ${order.refundStatus === 'approved' && !order.refundConfirmedAt ? `<button class="primary-btn" data-confirm-refund="${order.id}">Confirm receipt</button>` : ''}
+                ${!isReceived ? `<button class="ghost-btn" data-track-order="${order.id}" ${actionsDisabled ? 'disabled' : ''}>Track</button><button class="ghost-btn" data-repeat-order="${order.id}" ${actionsDisabled ? 'disabled' : ''}>Repeat</button><button class="ghost-btn" data-request-refund="${order.id}" ${canRequestRefund(order) && !isArchived ? '' : 'disabled'}>${getRefundButtonLabel(order)}</button>` : ''}
+                ${order.status === 'delivered' ? `<button class="primary-btn" data-order-received="${order.id}">Order received</button>` : ''}
+        ${order.refundStatus === 'approved' && !order.refundConfirmedAt && order.refundPaymentReference ? `<button class="primary-btn" data-confirm-refund="${order.id}">Confirm refund received</button>` : ''}
         ${canDelete ? `<button class="danger-btn" data-delete-order="${order.id}">Delete</button>` : ''}
       </div>
     </div>`;
@@ -1103,8 +1205,38 @@ function renderOrders() {
     document.querySelectorAll('[data-track-order]').forEach((button) => button.addEventListener('click', () => trackOrder(button.dataset.trackOrder)));
     document.querySelectorAll('[data-repeat-order]').forEach((button) => button.addEventListener('click', () => repeatOrder(button.dataset.repeatOrder)));
     document.querySelectorAll('[data-request-refund]').forEach((button) => button.addEventListener('click', () => requestRefund(button.dataset.requestRefund)));
+    document.querySelectorAll('[data-order-received]').forEach((button) => button.addEventListener('click', () => confirmOrderReceived(button.dataset.orderReceived)));
     document.querySelectorAll('[data-confirm-refund]').forEach((button) => button.addEventListener('click', () => confirmRefundReceipt(button.dataset.confirmRefund)));
     document.querySelectorAll('[data-delete-order]').forEach((button) => button.addEventListener('click', () => deleteOrderFromUI(button.dataset.deleteOrder)));
+}
+
+async function confirmOrderReceived(orderId) {
+    const order = state.orders.find((entry) => entry.id === orderId);
+    if (!order || order.status !== 'delivered' || order.refundStatus && order.refundStatus !== 'none') return;
+    const confirmed = window.confirm('Confirm that you received this order? After confirmation, active order actions and refunds will no longer be available.');
+    if (!confirmed) return;
+    try {
+        await db.collection('orders').doc(orderId).update({ status: 'received', customerReceivedAt: new Date(), sellerPayoutStatus: 'pending', deliveryPayoutStatus: 'pending', updatedAt: new Date() });
+        if (order.sellerId) {
+            const seller = state.sellers.find((entry) => entry.id === order.sellerId);
+            if (seller?.ownerUid) {
+                await db.collection('notifications').add({
+                    recipientUid: seller.ownerUid,
+                    title: 'Order received by customer',
+                    message: `The customer confirmed receipt of order #${order.orderNumber || order.id.slice(0, 6)}.`,
+                    type: 'order',
+                    read: false,
+                    isDeleted: false,
+                    createdAt: new Date()
+                });
+            }
+        }
+        await loadOrders(state.authUser.uid);
+        renderOrders();
+        createToast('Order receipt confirmed.', 'success');
+    } catch (error) {
+        createToast(error.message || 'Unable to confirm order receipt.', 'error');
+    }
 }
 
 function canRequestRefund(order) {
@@ -1131,6 +1263,9 @@ async function requestRefund(orderId) {
             refundAmount: Number(order.refundAmount || order.total || 0),
             refundRequestedAt: new Date(),
             refundProcessedAt: null,
+            refundPaymentMethod: null,
+            refundPaymentPhone: null,
+            refundPaymentReference: null,
             refundConfirmedAt: null,
             status: 'refund_requested',
             updatedAt: new Date()
@@ -1154,7 +1289,9 @@ async function requestRefund(orderId) {
 
 async function confirmRefundReceipt(orderId) {
     const order = state.orders.find((entry) => entry.id === orderId);
-    if (!order || order.refundStatus !== 'approved') return;
+    if (!order || order.refundStatus !== 'approved' || !order.refundPaymentReference) return;
+    const confirmed = window.confirm(`Have you received ${formatCurrency(order.refundAmount || 0)} via ${order.refundPaymentMethod || order.paymentMethod || 'mobile payment'}?`);
+    if (!confirmed) return;
     try {
         await db.collection('orders').doc(orderId).update({
             refundStatus: 'confirmed',
@@ -1172,11 +1309,11 @@ async function confirmRefundReceipt(orderId) {
 
 async function deleteOrderFromUI(orderId) {
     const order = state.orders.find((entry) => entry.id === orderId);
-    if (!order || !['received', 'refunded'].includes(order.status)) return;
+    if (!order || order.status !== 'received') return;
     const confirmed = window.confirm('Are you sure you want to permanently delete this order? This action cannot be undone.');
     if (!confirmed) return;
     try {
-        await db.collection('orders').doc(orderId).set({ isDeleted: true, updatedAt: new Date() }, { merge: true });
+        await db.collection('orders').doc(orderId).set({ customerDeletedAt: new Date(), updatedAt: new Date() }, { merge: true });
         state.orders = state.orders.filter((entry) => entry.id !== orderId);
         renderOrders();
         createToast('Order deleted.', 'success');
@@ -1269,15 +1406,19 @@ function renderFavorites() {
             const isFavorite = true;
             return `
             <div class="item-card">
-              <img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" />
+              <a href="${getImageUrl(item.imageFilename || item.image || '')}" target="_blank" rel="noopener noreferrer" title="Open image"><img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" /></a>
               <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0)}</span></div>
               <div class="muted card-description">${item.sellerDescription || item.description || 'Freshly prepared and ready to order.'}</div>
               <div class="muted">${seller?.name || 'Seller'}</div>
               <div class="modal-actions">
-                <button class="primary-btn" data-add-order="${item.id}">Add to cart</button>
-                                      ${getProductVideoUrl(item) ? `<a class="ghost-btn" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer">Watch video</a>` : ''}
+                <button class="primary-btn buy-action" data-add-order="${item.id}">Add to cart</button>
                 <button class="${getFavoriteButtonClass(isFavorite)}" data-favorite-item="${item.id}" aria-pressed="true">${getFavoriteIcon(isFavorite)}</button>
               </div>
+                            <div class="modal-actions contact-actions">
+                                ${getWhatsAppUrl(seller?.whatsappNumber || seller?.phone, `Hello ${seller?.name || 'seller'}, I would like to ask about ${item.name} before buying.`) ? `<a class="contact-icon-link" href="${getWhatsAppUrl(seller.whatsappNumber || seller.phone, `Hello ${seller.name || 'seller'}, I would like to ask about ${item.name} before buying.`)}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp seller" title="WhatsApp seller">${getWhatsAppIcon()}</a>` : ''}
+                                ${getProductVideoUrl(item) ? `<a class="contact-icon-link watch-video-button" href="${escapeHtml(getProductVideoUrl(item))}" target="_blank" rel="noopener noreferrer" aria-label="Watch video" title="Watch video">${getVideoIcon()}</a>` : ''}
+                                ${getSellerSocialLinks(seller)}
+                            </div>
             </div>`;
         }
         if (favorite.type === 'seller' && favorite.seller) {
@@ -2072,20 +2213,18 @@ function renderCheckout() {
     const items = getCartItems();
     const checkoutItem = items[0] || null;
     const subtotal = checkoutItem ? (checkoutItem.menuItem?.price || 0) * checkoutItem.quantity : 0;
-    const deliveryFee = Number(state.cart.deliveryFee || state.deliveryFee || 60);
+    const selectedDeliveryOption = state.cart.deliveryOption || state.customerProfile?.defaultDeliveryOption || 'regular';
+    const deliveryFee = selectedDeliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
     const total = subtotal + deliveryFee;
     const seller = state.sellers.find((entry) => entry.id === state.cart.sellerId);
     const paymentDetails = resolveSellerPaymentDetails(seller, state.cart);
-    const paymentReceiverLabel = paymentDetails.sellerPaymentReceiver || 'No payment receiver has been added yet for this seller.';
-    const acceptedMethodsLabel = paymentDetails.acceptedPaymentMethods.length ? paymentDetails.acceptedPaymentMethods.map((method) => method.replace(/_/g, ' ')).join(', ') : 'Mobile money or cash';
+    const paymentReceiverLabel = state.platformPaymentNumbers.orangeMoneyNumber || state.platformPaymentNumbers.lonestarMoneyNumber || 'Admin payment account is not configured yet.';
+    const acceptedMethodsLabel = [state.platformPaymentNumbers.orangeMoneyNumber ? 'Orange Money' : '', state.platformPaymentNumbers.lonestarMoneyNumber ? 'Lonestar Cell' : ''].filter(Boolean).join(', ') || 'Mobile money';
     const activeAddress = getActiveAddress();
     const activeAddressLine = getAddressSummary(activeAddress) || state.customerProfile?.address || 'No active address';
     const coordinates = activeAddress?.coordinates?.latitude != null && activeAddress?.coordinates?.longitude != null ? `${activeAddress.coordinates.latitude}, ${activeAddress.coordinates.longitude}` : '';
 
-    const paymentNumbers = getCurrentCheckoutPaymentNumbers();
-    if (state.cart.sellerId && !paymentNumbers.loaded && !paymentNumbers.loading) {
-        void ensureCheckoutPaymentNumbers();
-    }
+    const paymentNumbers = { ...state.platformPaymentNumbers, loaded: true };
 
     const availablePaymentMethods = [];
     if (paymentNumbers.orangeMoneyNumber) {
@@ -2136,6 +2275,8 @@ function renderCheckout() {
           </div>
         ` : '<div class="empty-state">No item selected. Choose a dish from the home page to begin checkout.</div>'}
         <p><strong>Subtotal:</strong> ${formatCurrency(subtotal)}</p>
+        <label>Delivery option<select id="deliveryOptionSelect"><option value="regular" ${selectedDeliveryOption === 'regular' ? 'selected' : ''}>Regular delivery (${state.deliveryOptions.regularDays} days) - ${formatCurrency(state.deliveryOptions.regularFee)}</option><option value="express" ${selectedDeliveryOption === 'express' ? 'selected' : ''}>Express delivery (${state.deliveryOptions.expressHours} hours) - ${formatCurrency(state.deliveryOptions.expressFee)}</option></select></label>
+        <label><input type="checkbox" name="saveDeliveryDefault" ${state.customerProfile?.defaultDeliveryOption === selectedDeliveryOption ? 'checked' : ''} /> Save as my default delivery option</label>
         <p><strong>Delivery fee:</strong> ${formatCurrency(deliveryFee)}</p>
         <p><strong>Total:</strong> ${formatCurrency(total)}</p>
         <div class="muted">Payment receiver: ${escapeHtml(paymentReceiverLabel)}</div>
@@ -2208,6 +2349,12 @@ function renderCheckout() {
         updateCheckoutQuantity(Number.isNaN(nextQuantity) ? 1 : nextQuantity, false);
     });
     document.getElementById('removeCheckoutItemButton')?.addEventListener('click', removeCheckoutItem);
+    document.getElementById('deliveryOptionSelect')?.addEventListener('change', (event) => {
+        state.cart.deliveryOption = event.target.value;
+        state.cart.deliveryFee = event.target.value === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
+        saveCartToStorage();
+        renderCheckout();
+    });
     document.getElementById('removeCheckoutHeaderButton')?.addEventListener('click', removeCheckoutItem);
     document.querySelectorAll('.payment-method-option input[name="paymentMethod"]').forEach((radio) => {
         radio.addEventListener('change', () => {
@@ -2411,6 +2558,7 @@ async function placeOrder() {
     const paymentMethod = formData.get('paymentMethod')?.toString() || 'orange_money';
     const paymentPhone = formData.get('paymentPhone')?.toString().trim();
     const paymentDetails = formData.get('paymentDetails')?.toString().trim();
+    const saveDeliveryDefault = formData.get('saveDeliveryDefault') === 'on';
     const notes = formData.get('notes')?.toString().trim();
     const selectedLocationId = state.cart.selectedLocationId || state.activeAddressId || '';
     const selectedLocation = state.addresses.find((address) => address.id === selectedLocationId) || getActiveAddress() || null;
@@ -2427,11 +2575,14 @@ async function placeOrder() {
     }
     const items = getCartItems();
     const subtotal = items.reduce((sum, entry) => sum + (entry.menuItem?.price || 0) * entry.quantity, 0);
-    const deliveryFee = Number(state.cart.deliveryFee || state.deliveryFee || 60);
+    const deliveryOption = formData.get('deliveryOption')?.toString() || state.cart.deliveryOption || 'regular';
+    const deliveryFee = deliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
     const total = subtotal + deliveryFee;
     const seller = state.sellers.find((entry) => entry.id === state.cart.sellerId);
-    const sellerPaymentDetails = resolveSellerPaymentDetails(seller, state.cart);
-    const etaMinutes = Number(seller?.estimatedPrepTime || state.customerProfile?.estimatedPrepTime || 35) + 25;
+    const placedAt = new Date();
+    const estimatedDeliveryTime = deliveryOption === 'express'
+        ? new Date(placedAt.getTime() + (state.deliveryOptions.expressHours * 60 * 60 * 1000))
+        : new Date(placedAt.getTime() + (state.deliveryOptions.regularDays * 24 * 60 * 60 * 1000));
     const deliveryLocationPayload = buildDeliveryLocationPayload(selectedLocation);
     const orderPayload = {
         customerUid: state.authUser.uid,
@@ -2439,9 +2590,10 @@ async function placeOrder() {
         customerPhone,
         sellerId: state.cart.sellerId,
         sellerName: state.cart.sellerName || seller?.name || 'Seller',
-        sellerMobileMoney: sellerPaymentDetails.sellerMobileMoney,
-        sellerPaymentReceiver: sellerPaymentDetails.sellerPaymentReceiver,
-        sellerAcceptedPaymentMethods: sellerPaymentDetails.acceptedPaymentMethods,
+        sellerMobileMoney: '',
+        sellerPaymentReceiver: '',
+        sellerAcceptedPaymentMethods: [],
+        paymentReceiver: paymentMethod === 'orange_money' ? state.platformPaymentNumbers.orangeMoneyNumber : state.platformPaymentNumbers.lonestarMoneyNumber,
         address: activeAddressLine,
         deliveryLocationId: selectedLocation?.id || '',
         deliveryLocationLabel: selectedLocation?.label || '',
@@ -2475,10 +2627,13 @@ async function placeOrder() {
         total,
         subtotal,
         deliveryFee,
+        deliveryOption,
         paymentMethod,
         paymentPhone,
         paymentDetails,
         paymentStatus: 'pending',
+        sellerPayoutStatus: 'pending',
+        deliveryPayoutStatus: 'pending',
         amount: total,
         items: items.map((entry) => {
             const imageValue = entry.menuItem?.imageFilename || entry.menuItem?.image || '';
@@ -2496,8 +2651,9 @@ async function placeOrder() {
             };
         }),
         notes,
-        estimatedDeliveryTime: new Date(Date.now() + etaMinutes * 60000),
-        createdAt: new Date(),
+        estimatedDeliveryTime,
+        placedAt,
+        createdAt: placedAt,
         updatedAt: new Date(),
         isDeleted: false,
         refundStatus: 'none',
@@ -2507,10 +2663,16 @@ async function placeOrder() {
         refundConfirmedAt: null,
         refundAmount: 0,
         refundReason: '',
-        refundRejectedReason: ''
+        refundRejectedReason: '',
+        refundPaymentMethod: null,
+        refundPaymentPhone: null,
+        refundPaymentReference: null
     };
     try {
         await db.collection('orders').add(orderPayload);
+        if (saveDeliveryDefault) {
+            await db.collection('users').doc(state.authUser.uid).set({ defaultDeliveryOption: deliveryOption, updatedAt: new Date() }, { merge: true });
+        }
         await syncActiveOrderLocation(activeAddressLine, orderPayload.deliveryLocation);
         state.cart = normalizeCartState({ sellerId: '', sellerName: '', items: [], drink: null, paymentMethod: 'orange_money', paymentPhone: '', paymentDetails: '', contactPhone: '', notes: '', deliveryFee: state.deliveryFee, selectedLocationId: '', sellerPaymentReceiver: '', sellerAcceptedPaymentMethods: [] });
         saveCartToStorage();
@@ -2529,7 +2691,7 @@ async function placeOrder() {
 function trackOrder(orderId) {
     const order = state.orders.find((entry) => entry.id === orderId);
     if (!order) return;
-    openModal(`Order ${order.orderNumber || order.id.slice(0, 6)}`, `<div class="stack"><p>Status: ${order.status}</p><p>Seller: ${order.sellerName || ''}</p><p>Total: ${formatCurrency(order.total || 0)}</p><p>ETA: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</p><p>Refund: ${order.refundStatus || 'none'}</p></div>`);
+    openModal(`Order ${order.orderNumber || order.id.slice(0, 6)}`, `<div class="stack"><p>Status: ${order.status}</p><p>Seller: ${order.sellerName || ''}</p><p>Total: ${formatCurrency(order.total || 0)}</p><p>Placed: ${formatDate(order.placedAt || order.createdAt)}</p><p>Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</p><p>Refund: ${order.refundStatus || 'none'}</p></div>`);
 }
 
 function repeatOrder(orderId) {
