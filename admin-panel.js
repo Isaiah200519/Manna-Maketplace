@@ -1595,9 +1595,9 @@ window.confirmOrderPayment = async (orderId) => {
   const reference = window.prompt('Confirm payment reference', order.paymentDetails || '');
   if (!reference || !reference.trim()) return;
   try {
-    await updateDocument('orders', orderId, { paymentStatus: 'confirmed', paymentConfirmedAt: new Date(), paymentConfirmedBy: state.user?.uid || state.user?.email || 'admin', paymentConfirmationReference: reference.trim(), updatedAt: new Date() });
+    await updateDocument('orders', orderId, { paymentStatus: 'confirmed', status: 'preparing', paymentConfirmedAt: new Date(), paymentConfirmedBy: state.user?.uid || state.user?.email || 'admin', paymentConfirmationReference: reference.trim(), updatedAt: new Date() });
     await addDocument('notifications', { recipientUid: order.customerUid, title: 'Payment confirmed', message: `Payment for order #${order.orderNumber || order.id.slice(0, 6)} was confirmed.`, type: 'payment', read: false, isDeleted: false, createdAt: new Date() });
-    createToast('Order payment confirmed.', 'success');
+    createToast('Order payment confirmed and moved to preparation.', 'success');
   } catch (error) {
     createToast(error.message || 'Unable to confirm order payment.', 'error');
   }

@@ -10,12 +10,12 @@
     "description": "Manna Marketplace – Premium multi-role food delivery and marketplace platform.",
     "icons": [
         {
-            "src": "./images/logo/logo.svg",
+            "src": "./images/logo/marketplace-logo.svg",
             "sizes": "any",
             "type": "image/svg+xml"
         },
         {
-            "src": "./images/logo/logo.svg",
+            "src": "./images/logo/marketplace-logo.svg",
             "sizes": "any",
             "type": "image/svg+xml"
         }

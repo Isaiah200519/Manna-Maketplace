@@ -1210,13 +1210,9 @@ function renderOrders() {
         const currentStatus = order.status || 'pending';
         const shouldDisableActions = Boolean(order.archived);
         const isReceived = currentStatus === 'received';
-        const acceptButtonClass = currentStatus === 'pending' && !shouldDisableActions ? 'primary-btn is-active' : 'ghost-btn';
-        const rejectButtonClass = ['pending', 'accepted', 'preparing'].includes(currentStatus) && !shouldDisableActions ? 'ghost-btn' : 'ghost-btn';
-        const prepareButtonClass = ['accepted', 'preparing'].includes(currentStatus) && !shouldDisableActions ? 'primary-btn is-active' : 'ghost-btn';
         const readyButtonClass = ['preparing', 'ready'].includes(currentStatus) && !shouldDisableActions ? 'primary-btn is-active' : 'ghost-btn';
-        const acceptDisabled = currentStatus !== 'pending' || shouldDisableActions;
+        const rejectButtonClass = ['preparing', 'ready'].includes(currentStatus) && !shouldDisableActions ? 'ghost-btn' : 'ghost-btn';
         const rejectDisabled = ['cancelled', 'delivered', 'received'].includes(currentStatus) || shouldDisableActions;
-        const prepareDisabled = !['accepted', 'preparing'].includes(currentStatus) || shouldDisableActions;
         const readyDisabled = !['preparing', 'ready'].includes(currentStatus) || shouldDisableActions;
         return `
     <div class="list-item ${shouldDisableActions ? 'archived-order-card' : ''}">
@@ -1231,10 +1227,8 @@ function renderOrders() {
       <div class="muted">Partner: ${order.deliveryPersonName || (order.deliveryPersonUid ? 'Assigned delivery person' : 'Awaiting assignment')} • Refund: ${order.refundStatus || 'none'}${order.refundRequested ? ' • requested by customer' : ''}</div>
       <div class="modal-actions">
                 ${isReceived ? `<button class="ghost-btn" data-open-order-chat="${order.id}">Chat</button>` : `
-        <button class="${acceptButtonClass}" data-order-action="accept" data-order-id="${order.id}" ${acceptDisabled ? 'disabled' : ''}>Accept</button>
-        <button class="${rejectButtonClass}" data-order-action="reject" data-order-id="${order.id}" ${rejectDisabled ? 'disabled' : ''}>Reject</button>
-        <button class="${prepareButtonClass}" data-order-action="prepare" data-order-id="${order.id}" ${prepareDisabled ? 'disabled' : ''}>Prepare</button>
         <button class="${readyButtonClass}" data-order-action="ready" data-order-id="${order.id}" ${readyDisabled ? 'disabled' : ''}>Ready</button>
+        <button class="${rejectButtonClass}" data-order-action="reject" data-order-id="${order.id}" ${rejectDisabled ? 'disabled' : ''}>Reject</button>
         ${order.refundStatus === 'requested' ? `<button class="ghost-btn" data-order-action="approve-refund" data-order-id="${order.id}">Approve Refund</button><button class="ghost-btn" data-order-action="reject-refund" data-order-id="${order.id}">Reject Refund</button>` : ''}
         <button class="ghost-btn" data-order-action="details" data-order-id="${order.id}">Details</button>
         <button class="ghost-btn" data-open-order-chat="${order.id}">Chat</button>
@@ -2576,18 +2570,16 @@ async function handleOrderAction(action, orderId) {
     const orderRef = db.collection('orders').doc(orderId);
     const orderDoc = await orderRef.get();
     const currentOrder = orderDoc.data() || {};
-    if (['accept', 'prepare', 'ready'].includes(action) && currentOrder.paymentStatus !== 'confirmed') {
+    if (['ready'].includes(action) && currentOrder.paymentStatus !== 'confirmed') {
         createToast('This order is waiting for admin payment confirmation.', 'warning');
         return;
     }
     if (currentOrder.status === 'received') return;
     const nextStatus = {
-        accept: 'accepted',
         reject: 'cancelled',
-        prepare: 'preparing',
         ready: 'ready'
     }[action];
-    const requiresProfile = ['accept', 'prepare', 'ready'];
+    const requiresProfile = ['ready'];
     if (requiresProfile.includes(action) && !ensureSellerProfileComplete()) {
         return;
     }
@@ -2645,9 +2637,7 @@ async function handleOrderAction(action, orderId) {
     await orderRef.update({ status: nextStatus, updatedAt: new Date() });
     if (currentOrder.customerUid) {
         const customerNotifications = {
-            accept: { title: 'Order accepted', message: 'Your order was accepted and is being prepared.', type: 'order' },
             reject: { title: 'Order cancelled', message: 'Your order was cancelled by the seller.', type: 'order' },
-            prepare: { title: 'Order in progress', message: 'Your order is now being prepared.', type: 'order' },
             ready: { title: 'Order ready', message: 'Your order is ready for pickup.', type: 'order' }
         };
         const notification = customerNotifications[action];

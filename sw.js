@@ -12,7 +12,7 @@ const ASSETS_TO_CACHE = [
     './button-utils.js',
     './image-preview.js',
     './password-toggle.js',
-    './images/logo/logo.svg',
+    './images/logo/marketplace-logo.svg',
     './favicon.ico',
     './manifest.json'
 ];
