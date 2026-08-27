@@ -1,5 +1,5 @@
 import { initStorage, clearStoredAuthState, serverTimestamp, geoPoint } from './storage.js';
-import { formatCurrency, formatDate, createToast, getImageUrl, getSellerImageUrl, calculateDistance, copyText, dialUSSD, getCommunityOptions, escapeHtml } from './utils.js';
+import { formatCurrency, formatDate, createToast, getImageUrl, getSellerImageUrl, calculateDistance, copyText, dialUSSD, getCommunityOptions, escapeHtml, convertCurrency, normalizeCurrency } from './utils.js';
 import { DEFAULT_CATEGORY_TAXONOMY, getCategoryDisplayName, getCategoryOptions } from './category-taxonomy.js';
 import { getQRCardHTML, initQRCode, bindQRDownloadHandlers } from './qr-utils.js';
 import { resolveSellerPaymentDetails } from './checkout-utils.mjs';
@@ -146,6 +146,7 @@ function normalizeCartState(cart = {}) {
         items: Array.isArray(cart.items) ? cart.items : [],
         drink: cart.drink || null,
         paymentMethod: cart.paymentMethod || 'orange_money',
+        paymentCurrency: normalizeCurrency(cart.paymentCurrency || 'LRD'),
         paymentPhone: cart.paymentPhone || '',
         paymentDetails: cart.paymentDetails || '',
         contactPhone: cart.contactPhone || '',
@@ -1039,7 +1040,7 @@ function renderHome() {
             <div class="panel-card-header">
               <strong>${item.name}</strong>
               <div class="product-card-meta">
-                <span class="badge">${formatCurrency(item.price || 0)}</span>
+                <span class="badge">${formatCurrency(item.price || 0, item.currency)}</span>
                 ${isNearby ? '<span class="priority-badge">Nearby</span>' : ''}
                 ${distanceLabel ? `<span class="distance-badge">📍 ${distanceLabel}</span>` : ''}
               </div>
@@ -1155,7 +1156,7 @@ async function openSeller(sellerId) {
         ${menuItems.length ? menuItems.map((item) => `
           <div class="item-card">
             <a href="${getImageUrl(item.imageFilename || item.image || '')}" target="_blank" rel="noopener noreferrer" title="Open image"><img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" /></a>
-            <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0)}</span></div>
+            <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0, item.currency)}</span></div>
             <div class="muted card-description">${item.sellerDescription || 'Freshly prepared and ready to order.'}</div>
                         <div class="modal-actions">
                               <button class="primary-btn buy-action" data-add-order="${item.id}">Add to cart</button>
@@ -1407,7 +1408,7 @@ function renderFavorites() {
             return `
             <div class="item-card">
               <a href="${getImageUrl(item.imageFilename || item.image || '')}" target="_blank" rel="noopener noreferrer" title="Open image"><img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name}" onerror="this.src='./images/placeholder.png'" /></a>
-              <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0)}</span></div>
+              <div class="panel-card-header"><strong>${item.name}</strong><span class="badge">${formatCurrency(item.price || 0, item.currency)}</span></div>
               <div class="muted card-description">${item.sellerDescription || item.description || 'Freshly prepared and ready to order.'}</div>
               <div class="muted">${seller?.name || 'Seller'}</div>
               <div class="modal-actions">
@@ -2186,7 +2187,7 @@ function renderCart() {
     document.getElementById('cartContent').innerHTML = items.length ? items.map((entry) => `
     <div class="item-card cart-item-card">
       <img src="${getImageUrl(entry.menuItem?.imageFilename || entry.menuItem?.image || '')}" alt="${entry.menuItem?.name || 'Item'}" onerror="this.src='./images/placeholder.png'" />
-      <div class="panel-card-header"><strong>${entry.menuItem?.name || 'Item'}</strong><span>${formatCurrency((entry.menuItem?.price || 0) * entry.quantity)}</span></div>
+    <div class="panel-card-header"><strong>${entry.menuItem?.name || 'Item'}</strong><span>${formatCurrency((entry.menuItem?.price || 0) * entry.quantity, entry.menuItem?.currency)}</span></div>
       <div class="muted">${entry.menuItem?.sellerDescription || 'Freshly prepared for delivery.'}</div>
       <div class="cart-actions-row">
         <div class="cart-quantity-control">
@@ -2212,10 +2213,11 @@ function renderCheckout() {
     state.cart = normalizeCartState(state.cart);
     const items = getCartItems();
     const checkoutItem = items[0] || null;
-    const subtotal = checkoutItem ? (checkoutItem.menuItem?.price || 0) * checkoutItem.quantity : 0;
+    const selectedPaymentCurrency = normalizeCurrency(state.cart.paymentCurrency || 'LRD');
+    const subtotal = items.reduce((sum, entry) => sum + convertCurrency((entry.menuItem?.price || 0) * entry.quantity, entry.menuItem?.currency, selectedPaymentCurrency), 0);
     const selectedDeliveryOption = state.cart.deliveryOption || state.customerProfile?.defaultDeliveryOption || 'regular';
     const deliveryFee = selectedDeliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
-    const total = subtotal + deliveryFee;
+    const total = subtotal + convertCurrency(deliveryFee, 'LRD', selectedPaymentCurrency);
     const seller = state.sellers.find((entry) => entry.id === state.cart.sellerId);
     const paymentDetails = resolveSellerPaymentDetails(seller, state.cart);
     const paymentReceiverLabel = state.platformPaymentNumbers.orangeMoneyNumber || state.platformPaymentNumbers.lonestarMoneyNumber || 'Admin payment account is not configured yet.';
@@ -2256,7 +2258,7 @@ function renderCheckout() {
         }
     };
     const activePaymentMeta = paymentMethodMeta[selectedPaymentMethod] || paymentMethodMeta.orange_money;
-    const payableAmount = Math.max(1, Math.round(total));
+    const payableAmount = Math.max(1, Math.round(total * 100) / 100);
     const ussdCode = selectedPaymentNumber ? activePaymentMeta.template(selectedPaymentNumber, payableAmount) : '';
     const isUnavailable = Boolean(selectedPaymentMethod && selectedPaymentNumber === '' && state.cart.sellerId);
     const unavailableMessage = isUnavailable ? `This seller does not accept ${activePaymentMeta.label}. Please choose another method.` : '';
@@ -2274,11 +2276,11 @@ function renderCheckout() {
             </div>
           </div>
         ` : '<div class="empty-state">No item selected. Choose a dish from the home page to begin checkout.</div>'}
-        <p><strong>Subtotal:</strong> ${formatCurrency(subtotal)}</p>
+        <p><strong>Subtotal:</strong> ${formatCurrency(subtotal, selectedPaymentCurrency)}</p>
         <label>Delivery option<select id="deliveryOptionSelect"><option value="regular" ${selectedDeliveryOption === 'regular' ? 'selected' : ''}>Regular delivery (${state.deliveryOptions.regularDays} days) - ${formatCurrency(state.deliveryOptions.regularFee)}</option><option value="express" ${selectedDeliveryOption === 'express' ? 'selected' : ''}>Express delivery (${state.deliveryOptions.expressHours} hours) - ${formatCurrency(state.deliveryOptions.expressFee)}</option></select></label>
         <label><input type="checkbox" name="saveDeliveryDefault" ${state.customerProfile?.defaultDeliveryOption === selectedDeliveryOption ? 'checked' : ''} /> Save as my default delivery option</label>
-        <p><strong>Delivery fee:</strong> ${formatCurrency(deliveryFee)}</p>
-        <p><strong>Total:</strong> ${formatCurrency(total)}</p>
+        <p><strong>Delivery fee:</strong> ${formatCurrency(convertCurrency(deliveryFee, 'LRD', selectedPaymentCurrency), selectedPaymentCurrency)}</p>
+        <p><strong>Total to pay:</strong> ${formatCurrency(total, selectedPaymentCurrency)}</p>
         <div class="muted">Payment receiver: ${escapeHtml(paymentReceiverLabel)}</div>
         <div class="muted">Accepted methods: ${escapeHtml(acceptedMethodsLabel)}</div>
         ${seller?.phone ? `<div class="muted">Seller phone: ${escapeHtml(seller.phone)}</div>` : ''}
@@ -2320,9 +2322,12 @@ function renderCheckout() {
               <span>Lonestar Cell</span>
             </label>` : ''}
           </div>
-          <div class="muted">Seller payment receiver: ${escapeHtml(paymentReceiverLabel)}</div>
+          <label>Payment currency<select id="paymentCurrencySelect" name="paymentCurrency"><option value="LRD" ${selectedPaymentCurrency === 'LRD' ? 'selected' : ''}>Liberian Dollar (LRD)</option><option value="USD" ${selectedPaymentCurrency === 'USD' ? 'selected' : ''}>US Dollar (USD)</option></select></label>
+          <div class="muted">Product prices convert using each product's original currency: LRD at 195 LRD/USD and USD at 185 LRD/USD.</div>
+          <div class="muted">Payment amount: ${formatCurrency(payableAmount, selectedPaymentCurrency)}</div>
+          <div class="muted">Seller payment receiver: ${escapeHtml(selectedPaymentNumber || paymentReceiverLabel)}</div>
           ${isUnavailable ? `<div class="payment-unavailable-message">${escapeHtml(unavailableMessage)}</div>` : ussdCode ? `<div class="ussd-payment-card">
-            <div class="ussd-code-label">USSD payment code</div>
+            <div class="ussd-code-label">USSD payment code (${escapeHtml(selectedPaymentCurrency)})</div>
             <div class="ussd-code" id="displayedUssdCode">${escapeHtml(ussdCode)}</div>
             <div class="ussd-actions">
               <button class="primary-btn" type="button" id="copyUssdButton">Copy Code</button>
@@ -2362,6 +2367,11 @@ function renderCheckout() {
             saveCartToStorage();
             renderCheckout();
         });
+    });
+    document.getElementById('paymentCurrencySelect')?.addEventListener('change', (event) => {
+        state.cart.paymentCurrency = normalizeCurrency(event.target.value);
+        saveCartToStorage();
+        renderCheckout();
     });
     document.getElementById('copyUssdButton')?.addEventListener('click', () => {
         const code = document.getElementById('displayedUssdCode')?.textContent?.trim();
@@ -2574,10 +2584,12 @@ async function placeOrder() {
         return;
     }
     const items = getCartItems();
-    const subtotal = items.reduce((sum, entry) => sum + (entry.menuItem?.price || 0) * entry.quantity, 0);
+    const subtotal = items.reduce((sum, entry) => sum + convertCurrency((entry.menuItem?.price || 0) * entry.quantity, entry.menuItem?.currency, 'LRD'), 0);
     const deliveryOption = formData.get('deliveryOption')?.toString() || state.cart.deliveryOption || 'regular';
     const deliveryFee = deliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
     const total = subtotal + deliveryFee;
+    const paymentCurrency = normalizeCurrency(formData.get('paymentCurrency') || state.cart.paymentCurrency || 'LRD');
+    const paymentAmount = items.reduce((sum, entry) => sum + convertCurrency((entry.menuItem?.price || 0) * entry.quantity, entry.menuItem?.currency, paymentCurrency), 0) + convertCurrency(deliveryFee, 'LRD', paymentCurrency);
     const seller = state.sellers.find((entry) => entry.id === state.cart.sellerId);
     const placedAt = new Date();
     const estimatedDeliveryTime = deliveryOption === 'express'
@@ -2631,10 +2643,13 @@ async function placeOrder() {
         paymentMethod,
         paymentPhone,
         paymentDetails,
+        paymentCurrency,
+        paymentAmount,
         paymentStatus: 'pending',
         sellerPayoutStatus: 'pending',
         deliveryPayoutStatus: 'pending',
-        amount: total,
+        amount: paymentAmount,
+        amountCurrency: paymentCurrency,
         items: items.map((entry) => {
             const imageValue = entry.menuItem?.imageFilename || entry.menuItem?.image || '';
             const imagePath = normalizeImagePath(imageValue, 'products');
@@ -2647,7 +2662,8 @@ async function placeOrder() {
                 image: imagePath,
                 imageFilename: imageValue,
                 imagePath,
-                price: entry.menuItem?.price || 0
+                price: entry.menuItem?.price || 0,
+                currency: normalizeCurrency(entry.menuItem?.currency)
             };
         }),
         notes,

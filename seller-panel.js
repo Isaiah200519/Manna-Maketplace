@@ -1,5 +1,5 @@
 import { initStorage, clearStoredAuthState } from './storage.js';
-import { formatCurrency, formatDate, escapeHtml, createToast, copyText, getImageUrl, getSellerImageUrl, getCommunityOptions, isDateInRange } from './utils.js';
+import { formatCurrency, formatDate, escapeHtml, createToast, copyText, getImageUrl, getSellerImageUrl, getCommunityOptions, isDateInRange, normalizeCurrency } from './utils.js';
 import { DEFAULT_CATEGORY_TAXONOMY, getCategoryDisplayName, getCategoryOptions } from './category-taxonomy.js';
 import { getQRCardHTML, initQRCode, bindQRDownloadHandlers } from './qr-utils.js';
 import { isAdminOnlyEmail } from './auth.js';
@@ -1151,7 +1151,7 @@ function renderMenu() {
               <strong>${item.name || 'Untitled item'}</strong>
               <div class="muted">${item.category || 'General'}</div>
             </div>
-            <div>${formatCurrency(item.price || 0)}</div>
+            <div>${formatCurrency(item.price || 0, item.currency)}</div>
             <label><input type="checkbox" data-toggle-availability="${item.id}" ${item.availability ? 'checked' : ''} /> Available</label>
             <button class="ghost-btn" data-edit-menu="${item.id}">Edit</button>
             <button class="ghost-btn" data-share-menu="${item.id}">Share link</button>
@@ -2292,6 +2292,7 @@ async function addToMenu(productId) {
         name: masterProduct.name,
         category: getCategoryDisplayName(masterProduct.category || 'General'),
         price: 0,
+        currency: 'LRD',
         sellerDescription: masterProduct.description || '',
         availability: true,
         featured: false,
@@ -2346,7 +2347,8 @@ async function openMenuEditor(menuId) {
     modalTitle.textContent = 'Edit Store Item';
     modalBody.innerHTML = `
     <form id="menuEditorForm" class="form-grid">
-      <label>Price<input name="price" type="number" value="${item.price || 0}" /></label>
+    <label>Price<input name="price" type="number" min="0" step="0.01" value="${item.price || 0}" /></label>
+    <label>Currency<select name="currency"><option value="LRD" ${normalizeCurrency(item.currency) === 'LRD' ? 'selected' : ''}>LRD</option><option value="USD" ${normalizeCurrency(item.currency) === 'USD' ? 'selected' : ''}>USD</option></select></label>
       <label>Preparation Time<input name="preparationTime" type="number" value="${item.preparationTime || 20}" /></label>
       <label>Serving Size<input name="servingSize" value="${item.servingSize || ''}" /></label>
       <label>Stock Status<select name="stockStatus"><option ${item.stockStatus === 'in_stock' ? 'selected' : ''}>in_stock</option><option ${item.stockStatus === 'low_stock' ? 'selected' : ''}>low_stock</option><option ${item.stockStatus === 'out_of_stock' ? 'selected' : ''}>out_of_stock</option></select></label>
@@ -2380,6 +2382,7 @@ async function openMenuEditor(menuId) {
         }
         const payload = {
             price: Number(formData.get('price') || 0),
+            currency: normalizeCurrency(formData.get('currency')),
             preparationTime: Number(formData.get('preparationTime') || 0),
             servingSize: formData.get('servingSize'),
             stockStatus: formData.get('stockStatus'),

@@ -41,8 +41,24 @@ export function isDateInRange(value, startDate, endDate) {
     return true;
 }
 
-export function formatCurrency(value) {
-    return `L$${Number(value || 0).toLocaleString('en-LR')}`;
+export const CURRENCY_RATES = { LRD: 195, USD: 185 };
+
+export function normalizeCurrency(currency) {
+    return String(currency || 'LRD').toUpperCase() === 'USD' ? 'USD' : 'LRD';
+}
+
+export function formatCurrency(value, currency = 'LRD') {
+    const normalizedCurrency = normalizeCurrency(currency);
+    const symbol = normalizedCurrency === 'USD' ? 'US$' : 'L$';
+    return `${symbol}${Number(value || 0).toLocaleString('en-LR', { minimumFractionDigits: normalizedCurrency === 'USD' ? 2 : 0, maximumFractionDigits: 2 })}`;
+}
+
+export function convertCurrency(value, fromCurrency, toCurrency) {
+    const from = normalizeCurrency(fromCurrency);
+    const to = normalizeCurrency(toCurrency);
+    const amount = Number(value || 0);
+    if (from === to) return amount;
+    return from === 'USD' ? amount * CURRENCY_RATES.USD : amount / CURRENCY_RATES.LRD;
 }
 
 export function formatDate(value) {
