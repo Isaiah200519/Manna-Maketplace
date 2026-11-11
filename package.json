@@ -1,0 +1,12 @@
+{
+  "name": "manna-maketplace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-static-site.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.160.1"
+  }
+}

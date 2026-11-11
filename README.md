@@ -2,6 +2,12 @@
 /*netlify deploy --prod*/
 Manna Marketplace is a multi-category e-commerce platform for discovering products from local sellers, managing seller stores, and completing customer orders through a shared marketplace experience. It supports seller, customer, delivery, and admin panels backed by Firebase Authentication and Cloud Firestore.
 
+## Cloudflare Workers deployment
+
+The Worker serves the static site from the generated `public/` directory. Install the project dependencies and prepare the assets with `npm ci` and `npm run build`. Wrangler is configured in `wrangler.jsonc`; run `npm run deploy` from the repository root to build and deploy.
+
+For Cloudflare Workers Builds connected to this repository, set the build command to `npm run build` and the deploy command to `npx wrangler deploy`. Keep the repository root as the root directory. The generated `public/` directory is ignored by Git and recreated by the build command for each deployment.
+
 ## Live App
 
 Open the deployed application at:
