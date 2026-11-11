@@ -8,6 +8,10 @@ The Worker serves the static site from the generated `public/` directory. Instal
 
 For Cloudflare Workers Builds connected to this repository, set the build command to `npm run build` and the deploy command to `npx wrangler deploy`. Keep the repository root as the root directory. The generated `public/` directory is ignored by Git and recreated by the build command for each deployment.
 
+## Firestore maintenance status
+
+The public maintenance listener reads only `settings/maintenance`, which contains `maintenanceMode` and `maintenanceUntil`. Firestore rules allow unauthenticated reads of that document only; keep payment and other platform settings in the protected `settings/platform` document. Deploy rules with `firebase deploy --only firestore:rules --project manna-marketplace`.
+
 ## Live App
 
 Open the deployed application at:

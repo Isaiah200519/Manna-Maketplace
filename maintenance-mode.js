@@ -122,7 +122,7 @@ export function watchMaintenanceMode(db, documentRef = globalThis.document, runt
         previousInertValues.clear();
     };
 
-    const unsubscribe = db.collection('settings').doc('platform').onSnapshot((snapshot) => {
+    const unsubscribe = db.collection('settings').doc('maintenance').onSnapshot((snapshot) => {
         maintenanceSettings = snapshot.exists ? snapshot.data() || {} : {};
         setActive(isMaintenanceActive(maintenanceSettings, now()));
     }, (error) => {

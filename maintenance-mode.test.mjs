@@ -75,7 +75,7 @@ test('maintenance listener blocks all page content and restores it when maintena
             assert.equal(name, 'settings');
             return {
                 doc(id) {
-                    assert.equal(id, 'platform');
+                    assert.equal(id, 'maintenance');
                     return {
                         onSnapshot(callback) {
                             onSnapshot = callback;
@@ -119,7 +119,7 @@ test('maintenance automatically ends at its expiry and shows a live countdown', 
             assert.equal(name, 'settings');
             return {
                 doc(id) {
-                    assert.equal(id, 'platform');
+                    assert.equal(id, 'maintenance');
                     return {
                         onSnapshot(callback) {
                             onSnapshot = callback;

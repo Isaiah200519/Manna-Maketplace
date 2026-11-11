@@ -3191,6 +3191,10 @@ function renderSettings() {
       await Promise.all([
           storage.db.collection('adminSettings').doc('config').set(nextSettings, { merge: true }),
           storage.db.collection('settings').doc('platform').set(nextSettings, { merge: true }),
+          storage.db.collection('settings').doc('maintenance').set({
+            maintenanceMode: maintenanceEnabled,
+            maintenanceUntil
+          }, { merge: true }),
           storage.db.collection('appConfig').doc('wallet').set({
             adminMobileName: nextSettings.platformName || 'Manna Marketplace',
             adminMobileNumber: nextSettings.adminOrangeMoneyNumber || nextSettings.adminLonestarMoneyNumber || '',
