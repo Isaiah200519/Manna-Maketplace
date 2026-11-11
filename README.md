@@ -1,5 +1,5 @@
 # Manna Marketplace
-
+/*netlify deploy --prod*/
 Manna Marketplace is a multi-category e-commerce platform for discovering products from local sellers, managing seller stores, and completing customer orders through a shared marketplace experience. It supports seller, customer, delivery, and admin panels backed by Firebase Authentication and Cloud Firestore.
 
 ## Live App

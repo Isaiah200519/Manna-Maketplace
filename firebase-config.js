@@ -19,8 +19,7 @@ if (window.firebase) {
     firebaseServices = {
         app: firebaseApp,
         auth: window.firebase.auth(firebaseApp),
-        db: window.firebase.firestore(firebaseApp),
-        analytics: typeof window.firebase.analytics === 'function' ? window.firebase.analytics(firebaseApp) : null
+        db: window.firebase.firestore(firebaseApp)
     };
 } else {
     console.error('[Manna Marketplace] Firebase SDK is unavailable. Firestore mode cannot start.');

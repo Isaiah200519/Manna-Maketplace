@@ -75,6 +75,7 @@ class QuerySnapshot {
         this.docs = docs;
         this.empty = docs.length === 0;
         this.size = docs.length;
+        this.metadata = { fromCache: false, hasPendingWrites: false };
     }
 }
 
@@ -159,7 +160,8 @@ class CollectionReference {
         return this.snapshot();
     }
 
-    onSnapshot(callback) {
+    onSnapshot(observerOrOptions, observer) {
+        const callback = typeof observerOrOptions === 'function' ? observerOrOptions : observer;
         const notifySnapshot = () => callback(this.snapshot());
         addListener(this.path, notifySnapshot);
         notifySnapshot();
@@ -240,6 +242,22 @@ function publicUser(record) {
 function createAuth() {
     const subscribers = new Set();
     const notifyAuth = () => subscribers.forEach((callback) => callback(publicUser(userForSession())));
+    const defaultDemoUsers = {
+        'customer@manna.test': { uid: 'customer-demo-local', email: 'customer@manna.test', password: 'password123', role: 'customer', displayName: 'Demo Customer', phone: '+231770000001', address: '123 Demo Street, Monrovia', createdAt: new Date(), updatedAt: new Date() },
+        'seller@manna.test': { uid: 'seller-demo-local', email: 'seller@manna.test', password: 'password123', role: 'seller', displayName: 'Demo Seller', phone: '+231770000002', createdAt: new Date(), updatedAt: new Date() },
+        'delivery@manna.test': { uid: 'delivery-demo-local', email: 'delivery@manna.test', password: 'password123', role: 'delivery', displayName: 'Demo Delivery', phone: '+231770000003', createdAt: new Date(), updatedAt: new Date() },
+        'admin@manna.test': { uid: 'admin-demo-local', email: 'admin@manna.test', password: 'password123', role: 'admin', displayName: 'Demo Admin', phone: '+231770000004', createdAt: new Date(), updatedAt: new Date() }
+    };
+    const ensureDemoAccount = async (email, password) => {
+        const normalizedEmail = String(email || '').trim().toLowerCase();
+        const seed = defaultDemoUsers[normalizedEmail];
+        if (!seed || !password) return null;
+        const existing = db.collection('users').snapshot().docs.map((doc) => doc.data()).find((user) => user.email?.toLowerCase() === normalizedEmail);
+        if (existing) return existing;
+        const record = { ...seed, password: String(password), uid: seed.uid, createdAt: new Date(), updatedAt: new Date() };
+        await db.collection('users').doc(record.uid).set(record);
+        return record;
+    };
     return {
         get currentUser() {
             return publicUser(userForSession());
@@ -250,7 +268,9 @@ function createAuth() {
             return () => subscribers.delete(callback);
         },
         async signInWithEmailAndPassword(email, password) {
-            const record = db.collection('users').snapshot().docs.map((doc) => doc.data()).find((user) => user.email?.toLowerCase() === email.toLowerCase() && user.password === password);
+            const normalizedEmail = String(email || '').trim().toLowerCase();
+            const record = db.collection('users').snapshot().docs.map((doc) => doc.data()).find((user) => user.email?.toLowerCase() === normalizedEmail && user.password === password)
+                || await ensureDemoAccount(normalizedEmail, password);
             if (!record) throw new Error('Invalid email or password.');
             localStorage.setItem(SESSION_KEY, record.uid);
             notifyAuth();
@@ -284,8 +304,11 @@ let activeDb = db;
 let activeAuth = auth;
 
 export function initStorage() {
-    if (!firebaseServices?.db || !firebaseServices?.auth) {
-        throw new Error('Firebase is unavailable. Check the Firebase SDK scripts and configuration.');
+    const useLocalFallback = window.location.protocol === 'file:' || !firebaseServices?.db || !firebaseServices?.auth;
+    if (useLocalFallback) {
+        activeDb = db;
+        activeAuth = auth;
+        return { db: activeDb, auth: activeAuth, ready: true };
     }
 
     activeDb = firebaseServices.db;
@@ -306,7 +329,9 @@ export function subscribeCollection(collectionName, callback, constraints = []) 
     constraints.forEach((constraint) => {
         query = query.where(constraint.field, constraint.operator, constraint.value);
     });
-    return query.onSnapshot((snapshot) => callback(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))));
+    return query.onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+        callback(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })), snapshot);
+    });
 }
 
 export function addDocument(collectionName, payload) {

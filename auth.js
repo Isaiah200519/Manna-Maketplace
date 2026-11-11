@@ -1,4 +1,5 @@
 import { initStorage } from './storage.js';
+import { applyThemePreference } from './theme-utils.js';
 
 const ADMIN_ONLY_EMAILS = new Set(['savieisaiah54@gmail.com']);
 
@@ -38,9 +39,15 @@ export function setupAuthRouter(options = {}) {
     const roleForUser = async (user) => {
         if (isAdminOnlyEmail(user.email)) return 'admin';
         const snapshot = await db.collection('users').doc(user.uid).get();
-        if (snapshot.exists) return snapshot.data()?.role || 'customer';
+        if (snapshot.exists) {
+            const profile = snapshot.data() || {};
+            applyThemePreference(profile);
+            return profile.role || 'customer';
+        }
         const emailSnapshot = await db.collection('users').where('email', '==', user.email).limit(1).get();
-        return emailSnapshot.docs[0]?.data()?.role || 'customer';
+        const profile = emailSnapshot.docs[0]?.data() || {};
+        applyThemePreference(profile);
+        return profile.role || 'customer';
     };
 
     showRegisterButton?.addEventListener('click', () => {

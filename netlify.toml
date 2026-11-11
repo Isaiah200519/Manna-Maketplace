@@ -1,0 +1,18 @@
+[build]
+  publish = "."
+  command = ""
+
+# Disable Netlify badge/branding
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    # Netlify badge can be controlled via build settings in dashboard
+    # but we prevent it from injecting via iframe restrictions
+
+# Add Content Security Policy to prevent badge injection
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    # Allow iframe for Netlify only if needed, otherwise keep it restricted
+    Content-Security-Policy = "frame-ancestors 'none'"

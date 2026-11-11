@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>try { const theme = localStorage.getItem('manna-theme'); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}</script>
     <title>Manna Marketplace Admin • Control Panel</title>
     <meta name="description"
         content="Manna Marketplace admin console for managing sellers, orders, and delivery operations." />
@@ -12,6 +13,7 @@
     <link rel="apple-touch-icon" href="./images/logo/marketplace-logo.svg" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./theme.css?v=4" />
 </head>
 
 <body class="panel-page admin-panel">
@@ -255,15 +257,18 @@
             </svg></button>
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-    <script src="./button-utils.js"></script>
-    <script src="./image-preview.js"></script>
-    <script type="module" src="./admin-panel.js"></script>
-    <script src="./password-toggle.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script defer src="./button-utils.js"></script>
+    <script defer src="./wallet-utils.js"></script>
+    <script defer src="./image-preview.js"></script>
+    <script defer src="./image-loader.js"></script>
+    <script defer src="./pwa-install.js"></script>
+    <script type="module" src="./admin-panel.js?v=6"></script>
+    <script defer src="./password-toggle.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[Manna Marketplace] SW failed:', err));

@@ -4,9 +4,9 @@ Manna Marketplace uses Firebase Authentication and Cloud Firestore when the Fire
 
 ## Live application
 
-The current GitHub Pages deployment is available at:
+The default live deployment is available at:
 
-<https://isaiah200519.github.io/Manna-Maketplace/>
+<https://manna-marketplace.web.app/>
 
 The repository provides marketplace browsing, seller stores, checkout, order tracking, and role-based panels. Sellers can copy direct product checkout links containing `sellerId` and `productId`, and authenticated customers are taken to a pre-filled checkout. Unauthenticated visitors are sent through login while the link parameters are preserved.
 
@@ -24,6 +24,7 @@ The application uses these top-level collections:
 - `users`
 - `categories`
 - `masterProducts`
+- `internationalProducts` (admin-managed wholesale offers referencing `masterProducts` by `masterProductId`)
 - `sellers`
 - `orders`
 - `deliveryPayouts`
@@ -31,6 +32,30 @@ The application uses these top-level collections:
 - `adminSessions`
 - `helpArticles`
 - `notifications`
+- `appConfig/wallet`
+- `depositRequests`
+- `withdrawalRequests`
+- `walletTransactions`
+
+The wallet stores seller balances on `sellers/{sellerId}.balance` and customer/delivery balances on `users/{userId}.balance`. Run `init-wallet.js` once from the browser console on a Firebase-loaded page by calling `initWalletSchema()`, then update the saved admin mobile-money number before accepting deposits.
+
+### Seller listing assistant
+
+The listing assistant runs entirely in the seller's browser. It learns category suggestions from active master products and the built-in category descriptions, extracts search keywords from seller-provided facts, and assembles a factual draft without an external AI API, API key, or Cloud Function. Suggestions are not saved until the seller applies them and clicks **Save** in the listing editor. The category suggestion is optional and requires a separate seller action.
+
+### Deploy Firestore indexes
+
+The composite indexes used by wallet history and withdrawal queries are defined in `firestore.indexes.json`. Deploy them after logging in to the Firebase CLI from this project directory:
+
+```powershell
+firebase login
+firebase use manna-marketplace
+firebase deploy --only firestore:indexes
+```
+
+Updating `firestore.indexes.json` locally does not create the indexes in the Firebase project until this deploy command completes. The first deployment can take several minutes while Firebase builds each index.
+
+Sellers purchase international offers into their private `sellers/{sellerId}/internationalInventory` subcollection. Inventory records retain `internationalProductId` and `masterProductId` references instead of copying master catalog documents. Sellers can edit resale price, currency, quantity, and customer-facing resale details; only active inventory with quantity remaining appears in the customer storefront.
 
 ## Run locally
 

@@ -1,6 +1,6 @@
 import { createToast } from './utils.js';
 
-const MANNA_MARKETPLACE_PLATFORM_URL = 'https://isaiah200519.github.io/Manna-Maketplace/';
+const MANNA_MARKETPLACE_PLATFORM_URL = 'https://manna-marketplace.netlify.app/customer';
 
 export function getQRCardHTML(containerId = 'mannaQrContainer', cardId = 'mannaQrCard') {
     return `

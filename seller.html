@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>try { const theme = localStorage.getItem('manna-theme'); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}</script>
     <title>Manna Marketplace Seller • Store Dashboard</title>
     <meta name="description"
         content="Manna Marketplace seller dashboard for managing store products, orders, and customer interactions." />
@@ -13,6 +14,7 @@
     <link rel="manifest" href="./manifest.json" />
     <link rel="stylesheet" href="./style.css" />
     <link rel="stylesheet" href="./seller.css" />
+    <link rel="stylesheet" href="./theme.css?v=3" />
 </head>
 
 <body class="panel-page seller-panel">
@@ -301,6 +303,7 @@
                                 <option value="unavailable">Unavailable</option>
                             </select>
                             <select id="menuSort" title="Sort store items">
+                                <option value="added" selected>Recently added</option>
                                 <option value="name">Sort by name</option>
                                 <option value="price">Sort by price</option>
                                 <option value="popularity">Sort by popularity</option>
@@ -502,15 +505,17 @@
         </div>
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-    <script src="./button-utils.js"></script>
-    <script src="./image-preview.js"></script>
-    <script type="module" src="./seller-panel.js"></script>
-    <script src="./password-toggle.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script defer src="./button-utils.js"></script>
+    <script defer src="./wallet-utils.js"></script>
+    <script defer src="./image-preview.js"></script>
+    <script defer src="./image-loader.js"></script>
+    <script defer src="./pwa-install.js"></script>
+    <script type="module" src="./seller-panel.js?v=3"></script>
+    <script defer src="./password-toggle.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[Manna Marketplace] SW failed:', err));

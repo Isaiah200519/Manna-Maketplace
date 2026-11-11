@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>try { const theme = localStorage.getItem('manna-theme'); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}</script>
     <title>Manna Marketplace Customer • Marketplace</title>
     <meta name="description"
         content="Browse Liberia's premium sellers and order delivery from the Manna Marketplace customer marketplace." />
@@ -12,16 +13,15 @@
     <link rel="apple-touch-icon" href="./images/logo/marketplace-logo.svg" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="stylesheet" href="./style.css?v=2" />
-    <link rel="stylesheet" href="./customer.css?v=2" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <link rel="stylesheet" href="./customer.css?v=6" />
+    <link rel="stylesheet" href="./theme.css?v=2" />
 </head>
 
 <body class="panel-page customer-panel">
     <div id="onboardingOverlay" class="onboarding-overlay hidden" aria-hidden="true">
         <div class="onboarding-card">
             <h2>Welcome to Manna Marketplace</h2>
-            <p>Ready to explore Liberia’s first premium food marketplace? Use the menu to browse sellers, place
+            <p>Ready to explore Liberia’s premium marketplace? Use the menu to browse sellers, place
                 orders, and track deliveries in real-time.</p>
             <ul>
                 <li>Browse local sellers and categories</li>
@@ -153,7 +153,7 @@
                 <div class="topbar-start">
                     <div>
                         <h1 id="pageTitle">Home</h1>
-                        <p id="pageSubtitle">Find food, place orders, and track deliveries.</p>
+                        <p id="pageSubtitle">Find products, place orders, and track deliveries.</p>
                     </div>
                 </div>
                 <div class="topbar-actions">
@@ -177,11 +177,11 @@
                 <div class="hero-card">
                     <div>
                         <p class="eyebrow">Deal of the day</p>
-                        <h3>Fresh meals from approved sellers across Liberia</h3>
+                        <h3>Fresh products from approved sellers across Liberia</h3>
                         <p>Enjoy fast delivery, real-time tracking, and simple mobile money checkout.</p>
                     </div>
                     <div class="hero-actions">
-                        <input id="homeSearch" type="search" placeholder="Search sellers or food" />
+                        <input id="homeSearch" type="search" placeholder="Search sellers or products" />
                         <button class="primary-btn" data-section="sellers">Browse now</button>
                     </div>
                 </div>
@@ -219,6 +219,7 @@
                         </div>
                     </div>
                 </div>
+                <div id="firstTimePromotionHost"></div>
                 <div id="homeContent" class="stack"></div>
             </section>
 
@@ -319,7 +320,7 @@
                         <h3>Checkout</h3>
                         <div class="modal-actions">
                             <button id="removeCheckoutHeaderButton" class="danger-btn" type="button">Remove</button>
-                            <button id="placeOrderButton" class="primary-btn">Place Order</button>
+                            <button id="placeOrderButton" class="primary-btn">Continue to payment</button>
                         </div>
                     </div>
                     <div id="checkoutContent" class="stack"></div>
@@ -366,15 +367,18 @@
             </svg></button>
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-    <script src="./button-utils.js"></script>
-    <script src="./image-preview.js"></script>
-    <script type="module" src="./customer-panel.js?v=2"></script>
-    <script src="./password-toggle.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-functions-compat.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script defer src="./button-utils.js"></script>
+    <script defer src="./wallet-utils.js"></script>
+    <script defer src="./image-preview.js"></script>
+    <script defer src="./image-loader.js"></script>
+    <script defer src="./pwa-install.js"></script>
+    <script type="module" src="./customer-panel.js?v=7"></script>
+    <script defer src="./password-toggle.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('[Manna Marketplace] SW failed:', err));

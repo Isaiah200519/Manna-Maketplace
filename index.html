@@ -9,11 +9,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="description"
         content="Manna Marketplace connects customers, sellers, delivery partners, and administrators in one trusted marketplace." />
+    <script>try { const theme = localStorage.getItem('manna-theme'); if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme; } catch {}</script>
     <link rel="shortcut icon" href="./favicon.ico" type="image/x-icon" />
     <link rel="icon" href="./images/logo/marketplace-logo.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./images/logo/marketplace-logo.svg" />
     <link rel="manifest" href="./manifest.json" />
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./theme.css?v=2" />
 </head>
 
 <body class="panel-page index-page">
@@ -175,13 +177,13 @@
         </main>
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-analytics-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script defer src="./pwa-install.js"></script>
     <script type="module" src="./app.js"></script>
     <script type="module" src="./seed-data.js"></script>
-    <script src="./password-toggle.js"></script>
+    <script defer src="./password-toggle.js"></script>
 </body>
 
 </html>

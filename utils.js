@@ -41,7 +41,7 @@ export function isDateInRange(value, startDate, endDate) {
     return true;
 }
 
-export const CURRENCY_RATES = { LRD: 195, USD: 185 };
+export const CURRENCY_RATES = { LRD: 195, USD: 195 };
 
 export function normalizeCurrency(currency) {
     return String(currency || 'LRD').toUpperCase() === 'USD' ? 'USD' : 'LRD';
@@ -50,7 +50,7 @@ export function normalizeCurrency(currency) {
 export function formatCurrency(value, currency = 'LRD') {
     const normalizedCurrency = normalizeCurrency(currency);
     const symbol = normalizedCurrency === 'USD' ? 'US$' : 'L$';
-    return `${symbol}${Number(value || 0).toLocaleString('en-LR', { minimumFractionDigits: normalizedCurrency === 'USD' ? 2 : 0, maximumFractionDigits: 2 })}`;
+    return `${symbol}${Number(value || 0).toLocaleString('en-LR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 }
 
 export function convertCurrency(value, fromCurrency, toCurrency) {
@@ -86,6 +86,10 @@ export function getInitials(name = 'Admin') {
         .slice(0, 2)
         .join('')
         .toUpperCase();
+}
+
+export function getAvatarHtml(name = 'User', size = '40px') {
+    return `<div class="avatar" style="width: ${size}; height: ${size}; font-size: ${parseInt(size) * 0.4}px;">${escapeHtml(getInitials(name))}</div>`;
 }
 
 export function createToast(message, type = 'info') {
@@ -150,6 +154,51 @@ export function getImageUrl(filename, fallback = './images/placeholder.png') {
     return `./images/products/${normalized}`;
 }
 
+const imagesWithoutThumbnails = new Set([
+    'accessories & gadgets/hand-electric-fan-1.jpg',
+    'books & stationery/fountain-pen-1.jpg',
+    'clothes/scarf-1.jpg',
+    'hair care/women-hair-1.jpg',
+    'hair care/women-hair-2.jpg',
+    'hair care/women-hair-3.jpg',
+    'hair care/women-hair-4.jpg',
+    'hair care/women-hair-5.jpg',
+    'hair care/women-hair-6.jpg',
+    'hair care/women-hair-7.jpg',
+    'hair care/women-hair-8.jpg',
+    'hair care/women-hair-9.jpg',
+    'hair care/women-hair-10.jpg',
+    'hair care/women-hair-11.jpg',
+    'jewelry & watches/medal-1.jpg',
+    'jewelry & watches/medal-2.jpg',
+    'jewelry & watches/medal-3.jpg',
+    'kitchen & dining/bottle-22.jpg.jpg',
+    'men-clothing/cap-15.jpg',
+    'men-clothing/t-shirt-17.jpg',
+    'products/samsung-galaxy-z-flod-2.jpg',
+    'products/samsung-galaxy-z-flod-3.jpg',
+    'products/samsung-galaxy-z-flod-4.jpg',
+    'products/samsung-galaxy-z-flod-5.jpg',
+    'products/samsung-galaxy-z-flod-6.jpg'
+]);
+
+export function getProductThumbnailUrl(filename, fallback = './images/placeholder.png') {
+    const imageUrl = getImageUrl(filename, fallback);
+    const localImagePath = imageUrl
+        .replace(/^(?:\.\/|\.\.\/|\/)?images\//i, '')
+        .split(/[?#]/, 1)[0]
+        .replace(/\\/g, '/')
+        .toLowerCase();
+    if (imagesWithoutThumbnails.has(localImagePath)) return imageUrl;
+
+    const productMatch = imageUrl.match(/^(\.\/images\/products\/)(?!optimized\/)([^/?#]+)\.(jpe?g)([?#].*)?$/i);
+    if (productMatch) return `${productMatch[1]}optimized/${productMatch[2]}.${productMatch[3]}${productMatch[4] || ''}`;
+
+    const localImageMatch = imageUrl.match(/^(?:\.\/|\.\.\/|\/)images\/(?!logo\/|products\/optimized\/|thumbnails\/)(.+\.(?:jpe?g|png))([?#].*)?$/i);
+    if (!localImageMatch) return imageUrl;
+    return `./images/thumbnails/${localImageMatch[1]}${localImageMatch[2] || ''}`;
+}
+
 export async function deleteOrder(orderId, db, options = {}) {
     if (!orderId || !db) return false;
     const { onSuccess, onError, userId, role } = options;
@@ -206,4 +255,13 @@ export function calculateDistance(lat1, lon1, lat2, lon2) {
         Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return Number((R * c).toFixed(2));
+}
+
+export function getHelpArticlesByContext(helpArticles, context, userRole = 'customer') {
+    if (!Array.isArray(helpArticles) || !context) return [];
+    return helpArticles.filter((article) => {
+        const hasContext = Array.isArray(article.displayContexts) && article.displayContexts.includes(context);
+        const hasRole = !Array.isArray(article.targetRoles) || article.targetRoles.length === 0 || article.targetRoles.includes(userRole);
+        return hasContext && hasRole;
+    });
 }

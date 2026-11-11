@@ -8,6 +8,7 @@ export const DEFAULT_CATEGORY_TAXONOMY = [
     { id: 'mens_clothing', name: "Men's Clothing", group: 'Fashion', description: 'Shirts, trousers, suits, traditional and casual wear for men', icon: 'mens_icon.png', imageFilename: 'mens_clothing.jpg' },
     { id: 'womens_clothing', name: "Women's Clothing", group: 'Fashion', description: 'Dresses, blouses, skirts, traditional and casual wear', icon: 'womens_icon.png', imageFilename: 'womens_clothing.jpg' },
     { id: 'kids_clothing', name: "Kids' Clothing", group: 'Fashion', description: 'School uniforms and outfits for boys and girls', icon: 'kids_icon.png', imageFilename: 'kids_clothing.jpg' },
+    { id: 'clothes', name: 'Clothes', group: 'Fashion', description: 'Clothing for adults and children in a range of sizes, colors, materials, and styles', icon: 'clothes_icon.png', imageFilename: 'clothes.jpg' },
     { id: 'shoes_footwear', name: 'Shoes & Footwear', group: 'Fashion', description: 'Sneakers, sandals, heels, boots, and formal shoes', icon: 'shoes_icon.png', imageFilename: 'shoes_footwear.jpg' },
     { id: 'bags_luggage', name: 'Bags & Luggage', group: 'Fashion', description: 'Handbags, backpacks, travel luggage, and wallets', icon: 'bags_icon.png', imageFilename: 'bags_luggage.jpg' },
     { id: 'jewelry_watches', name: 'Jewelry & Watches', group: 'Fashion', description: 'Gold, silver, fashion jewelry, and watches', icon: 'jewelry_icon.png', imageFilename: 'jewelry_watches.jpg' },
@@ -60,18 +61,32 @@ export function getCategoryOptions(includeAll = false) {
     }));
 }
 
+export function isMarketplaceCategory(value) {
+    const category = String(value || '').trim().toLowerCase();
+    if (!category || category === 'general') return true;
+    return DEFAULT_CATEGORY_TAXONOMY.some((entry) => (
+        entry.id.toLowerCase() === category || entry.name.toLowerCase() === category
+    ));
+}
+
 export async function ensureCategoriesSeeded(db) {
     if (!db || typeof db.collection !== 'function') return [];
     const snapshot = await db.collection('categories').get();
+    const existingCategoryIds = new Set(snapshot.docs.map((doc) => doc.id));
+    const missingCategories = DEFAULT_CATEGORY_TAXONOMY.filter((category) => !existingCategoryIds.has(category.id));
+    if (!missingCategories.length) return DEFAULT_CATEGORY_TAXONOMY;
+
     const batch = db.batch();
-    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-    DEFAULT_CATEGORY_TAXONOMY.forEach((category) => {
+    const serverTimestamp = typeof window !== 'undefined' && window.firebase?.firestore?.FieldValue?.serverTimestamp
+        ? window.firebase.firestore.FieldValue.serverTimestamp()
+        : () => new Date();
+    missingCategories.forEach((category) => {
         batch.set(db.collection('categories').doc(category.id), {
             ...category,
             isActive: true,
-            createdAt: window.firebase?.firestore?.FieldValue?.serverTimestamp?.() || new Date(),
-            updatedAt: window.firebase?.firestore?.FieldValue?.serverTimestamp?.() || new Date()
-        }, { merge: false });
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        }, { merge: true });
     });
     await batch.commit();
     return DEFAULT_CATEGORY_TAXONOMY;

@@ -1,7 +1,15 @@
 import { initStorage, clearStoredAuthState, serverTimestamp } from './storage.js';
-import { formatCurrency, formatDate, createToast } from './utils.js';
+import { formatCurrency, formatDate, createToast, escapeHtml, getAvatarHtml, getProductThumbnailUrl } from './utils.js';
+import { getVariantDisplayEntries } from './category-variants.js';
 import { getQRCardHTML, initQRCode, bindQRDownloadHandlers } from './qr-utils.js';
 import { isAdminOnlyEmail } from './auth.js';
+import { createRoleNotification } from './notification-utils.js';
+import { bindSoundToggle, playSoundEffect, renderSoundToggle } from './sound-effects.js';
+import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
+import { watchMaintenanceMode } from './maintenance-mode.js';
+
+let deliveryNotificationSnapshotReady = false;
+const deliveryOrderSnapshots = { ready: new Map(), assigned: new Map() };
 
 const state = {
     authUser: null,
@@ -24,9 +32,11 @@ const state = {
     sellersUnsubscribe: null,
     deliveryRequestsUnsubscribe: null,
     deliveryPartnerRequestsUnsubscribe: null,
-    ordersUnsubscribe: null,
+    readyOrdersUnsubscribe: null,
+    assignedOrdersUnsubscribe: null,
     notificationsUnsubscribe: null,
     chatsUnsubscribe: null
+    ,walletUnsubscribes: []
 };
 
 const elements = {
@@ -90,10 +100,12 @@ function scheduleAuthFallback() {
 
 function init() {
     bindEvents();
+    ensureDeliveryWalletSection();
     const storageApi = initStorage();
     storage = storageApi;
     auth = storageApi.auth;
     db = storageApi.db;
+    watchMaintenanceMode(db);
     if (auth) {
         auth.setPersistence().catch(() => { });
     }
@@ -102,6 +114,75 @@ function init() {
         return;
     }
     auth.onAuthStateChanged(handleAuthStateChange);
+}
+
+function ensureDeliveryWalletSection() {
+    if (document.getElementById('earningsSection')) return;
+    const nav = document.querySelector('.nav-links');
+    const button = document.createElement('button');
+    button.className = 'nav-item';
+    button.dataset.section = 'earnings';
+    button.innerHTML = '<span class="nav-icon">$</span><span>Earnings</span>';
+    button.addEventListener('click', () => showSection('earnings'));
+    nav?.appendChild(button);
+    const section = document.createElement('section');
+    section.id = 'earningsSection';
+    section.className = 'section-panel';
+    section.innerHTML = `<div class="panel-card"><div class="panel-card-header"><h3>Earnings</h3><span class="badge">Delivery balance</span></div><div class="wallet-balance-card"><div class="wbc-label">Available earnings</div><div class="wbc-amount" id="deliveryBalanceAmount">L$0.00</div><div class="wbc-actions"><button class="ghost-btn" id="deliveryWithdrawButton" type="button">Withdraw</button></div></div><div class="wallet-summary-grid"><div class="summary-item"><div class="summary-label">Total Earnings</div><div class="summary-amount" id="deliveryTotalEarnings">L$0.00</div></div><div class="summary-item"><div class="summary-label">Total Withdrawn</div><div class="summary-amount" id="deliveryTotalWithdrawn">L$0.00</div></div><div class="summary-item"><div class="summary-label">Pending Balance</div><div class="summary-amount" id="deliveryPendingBalance">L$0.00</div></div></div><form class="wallet-form-card hidden" id="deliveryWithdrawForm"><h4>Request withdrawal</h4><p class="muted">Your balance will be deducted immediately and held until your request is processed.</p><label>Amount (LRD)<input name="amount" type="number" min="1" required /></label><label>Recipient name<input name="recipientName" required /></label><label>Mobile money number<input name="recipientPhone" type="tel" required /></label><div class="wfc-actions"><button class="primary-btn" type="submit">Request withdrawal</button><button class="ghost-btn" id="cancelDeliveryWithdraw" type="button">Cancel</button></div></form><div class="wallet-section-block"><h4>Withdrawal requests</h4><div id="deliveryWithdrawalsList"></div></div><div class="wallet-section-block"><h4>Earnings history</h4><div id="deliveryTransactionsList"></div></div></div>`;
+    document.querySelector('.main-panel')?.appendChild(section);
+    document.getElementById('deliveryWithdrawButton')?.addEventListener('click', () => document.getElementById('deliveryWithdrawForm')?.classList.remove('hidden'));
+    document.getElementById('cancelDeliveryWithdraw')?.addEventListener('click', () => document.getElementById('deliveryWithdrawForm')?.classList.add('hidden'));
+    document.getElementById('deliveryWithdrawForm')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        withButtonState(button, async () => { await submitWithdrawalRequest(state.authUser.uid, 'delivery', state.profile?.displayName || state.profile?.email, data.amount, data.recipientName, data.recipientPhone); event.currentTarget.reset(); event.currentTarget.classList.add('hidden'); }, { loadingText: 'Submitting...', successText: 'Request placed', permanent: false });
+    });
+}
+
+async function initDeliveryWallet() {
+    ensureDeliveryWalletSection();
+    const userId = state.authUser.uid;
+    await autoReceiveOldWithdrawals(userId);
+    state.walletUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    state.walletUnsubscribes = [
+        db.collection('users').doc(userId).onSnapshot((snapshot) => { const balance = Number(snapshot.data()?.balance || 0); const element = document.getElementById('deliveryBalanceAmount'); if (element) element.textContent = formatLRD(balance); }),
+        db.collection('withdrawalRequests').where('userId', '==', userId).orderBy('createdAt', 'desc').onSnapshot((snapshot) => renderDeliveryWalletRequests(snapshot.docs))
+    ];
+    
+    // Load and display transaction statistics
+    const transactions = await loadTransactionHistory(userId);
+    const container = document.getElementById('deliveryTransactionsList');
+    if (container) container.innerHTML = transactions.length ? transactions.map((transaction) => `<div class="wallet-tx-row"><span>${escapeHtml(transaction.description || transaction.type)}</span><strong class="${transaction.amount >= 0 ? 'amount-credit' : 'amount-debit'}">${transaction.amount >= 0 ? '+' : '-'}${formatLRD(Math.abs(transaction.amount))}</strong></div>`).join('') : '<div class="empty-state">No earnings yet.</div>';
+    
+    // Calculate wallet summary statistics - only for earnings (no deposits for delivery)
+    const earningTransactions = transactions.filter((t) => t.type === 'order_earning' && t.amount > 0);
+    const withdrawalTransactions = transactions.filter((t) => t.type === 'withdrawal' && t.amount < 0);
+    const totalEarnings = earningTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const totalWithdrawn = Math.abs(withdrawalTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0));
+    
+    // Get pending withdrawals
+    const withdrawalsSnapshot = await db.collection('withdrawalRequests').where('userId', '==', userId).orderBy('createdAt', 'desc').get();
+    const pendingBalance = withdrawalsSnapshot.docs.filter((doc) => doc.data().status === 'pending').reduce((sum, doc) => sum + Number(doc.data().amount || 0), 0);
+    
+    // Update summary displays
+    const summaryElements = {
+        'deliveryTotalEarnings': totalEarnings,
+        'deliveryTotalWithdrawn': totalWithdrawn,
+        'deliveryPendingBalance': pendingBalance
+    };
+    
+    Object.entries(summaryElements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = formatLRD(value);
+    });
+}
+
+function renderDeliveryWalletRequests(docs) {
+    const container = document.getElementById('deliveryWithdrawalsList');
+    if (!container) return;
+    container.innerHTML = docs.length ? docs.map((doc) => { const item = doc.data(); return `<div class="wallet-tx-row"><span>${formatLRD(item.amount)} to ${escapeHtml(item.recipientPhone)}</span><span class="status-badge status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>${item.status === 'paid' ? `<button class="ghost-btn wallet-confirm-received" data-id="${doc.id}" type="button">Confirm received</button>` : ''}</div>`; }).join('') : '<div class="empty-state">No withdrawal requests yet.</div>';
+    container.querySelectorAll('.wallet-confirm-received').forEach((button) => button.addEventListener('click', () => withButtonState(button, () => db.collection('withdrawalRequests').doc(button.dataset.id).update({ status: 'received', receivedAt: new Date() }), { loadingText: 'Confirming...', successText: 'Received', permanent: true })));
 }
 
 function bindEvents() {
@@ -378,6 +459,7 @@ async function handleRegister(event) {
             rating: 4.9,
             totalDeliveries: 0,
             totalEarnings: 0,
+            balance: 0,
             approvedSellers: [],
             createdAt: new Date(),
             updatedAt: new Date()
@@ -481,11 +563,13 @@ async function handleAuthStateChange(user) {
         }
         state.authUser = user;
         state.profile = profile;
+        applyThemePreference(profile);
         elements.authScreen.classList.add('hidden');
         elements.appShell.classList.remove('hidden');
         showSection(state.activeSection);
         setupRealtimeListeners(user.uid);
         renderAll();
+        await initDeliveryWallet();
     } catch (error) {
         console.error(error);
         createToast(error.message || 'Unable to load the delivery dashboard.', 'error');
@@ -498,6 +582,7 @@ function setupRealtimeListeners(userId) {
     cleanupListeners();
     state.profileUnsubscribe = db.collection('users').doc(userId).onSnapshot((doc) => {
         state.profile = doc.data() || {};
+        applyThemePreference(state.profile);
         renderProfile();
         renderSettings();
         renderDashboard();
@@ -529,16 +614,29 @@ function setupRealtimeListeners(userId) {
         console.error('[Manna Marketplace] Delivery partner invitations listener failed:', error);
     });
 
-    state.ordersUnsubscribe = db.collection('orders').onSnapshot((snapshot) => {
-        state.allOrders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        renderAllLists();
-        renderDashboard();
+    state.readyOrdersUnsubscribe = db.collection('orders').where('status', '==', 'ready').onSnapshot((snapshot) => {
+        updateDeliveryOrderSnapshot('ready', snapshot);
     }, (error) => {
-        console.error('[Manna Marketplace] Delivery orders listener failed:', error);
+        console.error('[Manna Marketplace] Ready delivery orders listener failed:', error);
+    });
+    state.assignedOrdersUnsubscribe = db.collection('orders').where('deliveryPersonUid', '==', userId).onSnapshot((snapshot) => {
+        updateDeliveryOrderSnapshot('assigned', snapshot);
+    }, (error) => {
+        console.error('[Manna Marketplace] Assigned delivery orders listener failed:', error);
     });
 
-    state.notificationsUnsubscribe = db.collection('notifications').where('recipientUid', '==', userId).orderBy('createdAt', 'desc').onSnapshot((snapshot) => {
-        state.notifications = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    state.notificationsUnsubscribe = db.collection('notifications').where('recipientUid', '==', userId).orderBy('createdAt', 'desc').onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+        const notifications = snapshot.docs
+            .map((doc) => ({ id: doc.id, ...doc.data() }))
+            .filter((item) => !item.recipientRole || item.recipientRole === 'delivery_person');
+        if (deliveryNotificationSnapshotReady && !snapshot.metadata.fromCache) {
+            const existingIds = new Set(state.notifications.map((item) => item.id));
+            if (notifications.some((item) => !item.read && !item.isDeleted && !existingIds.has(item.id))) {
+                playSoundEffect('notification');
+            }
+        }
+        state.notifications = notifications;
+        if (!snapshot.metadata.fromCache) deliveryNotificationSnapshotReady = true;
         renderNotifications();
         renderHeaderNotifications();
     }, (error) => {
@@ -553,13 +651,26 @@ function setupRealtimeListeners(userId) {
     });
 }
 
+function updateDeliveryOrderSnapshot(source, snapshot) {
+    deliveryOrderSnapshots[source] = new Map(snapshot.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]));
+    const combinedOrders = new Map(deliveryOrderSnapshots.ready);
+    deliveryOrderSnapshots.assigned.forEach((order, id) => combinedOrders.set(id, order));
+    state.allOrders = [...combinedOrders.values()];
+    renderAllLists();
+}
+
 function cleanupListeners() {
-    [state.profileUnsubscribe, state.sellersUnsubscribe, state.deliveryRequestsUnsubscribe, state.deliveryPartnerRequestsUnsubscribe, state.ordersUnsubscribe, state.notificationsUnsubscribe, state.chatsUnsubscribe].forEach((unsubscribe) => { if (unsubscribe) unsubscribe(); });
+    deliveryNotificationSnapshotReady = false;
+    state.notifications = [];
+    [state.profileUnsubscribe, state.sellersUnsubscribe, state.deliveryRequestsUnsubscribe, state.deliveryPartnerRequestsUnsubscribe, state.readyOrdersUnsubscribe, state.assignedOrdersUnsubscribe, state.notificationsUnsubscribe, state.chatsUnsubscribe].forEach((unsubscribe) => { if (unsubscribe) unsubscribe(); });
+    deliveryOrderSnapshots.ready.clear();
+    deliveryOrderSnapshots.assigned.clear();
     state.profileUnsubscribe = null;
     state.sellersUnsubscribe = null;
     state.deliveryRequestsUnsubscribe = null;
     state.deliveryPartnerRequestsUnsubscribe = null;
-    state.ordersUnsubscribe = null;
+    state.readyOrdersUnsubscribe = null;
+    state.assignedOrdersUnsubscribe = null;
     state.notificationsUnsubscribe = null;
     state.chatsUnsubscribe = null;
 }
@@ -587,9 +698,22 @@ function renderAllLists() {
     renderDashboard();
 }
 
+function isOrderAvailableForDelivery(order, approvedSellerIds) {
+    const isSignupReward = order.orderType === 'signup_blind_box';
+    const sellerIsApprovedForDriver = isSignupReward
+        ? state.profile?.status === 'approved'
+        : approvedSellerIds.includes(order.sellerId);
+    return !order.isDeleted
+        && !isDeliveryDeadlineExpired(order)
+        && order.paymentStatus === 'confirmed'
+        && sellerIsApprovedForDriver
+        && order.status === 'ready'
+        && !order.deliveryPersonUid;
+}
+
 function renderDashboard() {
     const approvedSellerIds = state.profile?.approvedSellers || [];
-    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => !order.isDeleted && order.paymentStatus === 'confirmed' && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
+    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => isOrderAvailableForDelivery(order, approvedSellerIds));
     const active = state.allOrders.filter((order) => !order.isDeleted && order.deliveryPersonUid === state.authUser?.uid && order.status === 'out_for_delivery');
     const history = state.allOrders.filter((order) => !order.isDeleted && order.deliveryPersonUid === state.authUser?.uid && ['delivered', 'received'].includes(order.status));
     const today = history.filter((order) => {
@@ -632,6 +756,17 @@ function getDeliveryLocationMeta(order) {
     return { latitude, longitude, address, label, mapsUrl };
 }
 
+function getDeliveryDeadline(order) {
+    if (!order?.deliveryDeadlineAt) return null;
+    const deadline = order.deliveryDeadlineAt.toDate ? order.deliveryDeadlineAt.toDate() : new Date(order.deliveryDeadlineAt);
+    return Number.isNaN(deadline.getTime()) ? null : deadline;
+}
+
+function isDeliveryDeadlineExpired(order) {
+    const deadline = getDeliveryDeadline(order);
+    return Boolean(deadline && deadline.getTime() <= Date.now());
+}
+
 function renderDeliveryLocationMap(order) {
     const { latitude, longitude, label, mapsUrl } = getDeliveryLocationMeta(order);
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
@@ -653,20 +788,29 @@ function renderDeliveryLocationMap(order) {
       </div>`;
 }
 
+function renderDeliveryOrderVariantDetails(order) {
+    return (Array.isArray(order.items) ? order.items : []).map((item) => {
+        const variants = getVariantDisplayEntries(item);
+        return variants.length ? `<div class="muted">${escapeHtml(item.name || 'Item')}: ${variants.map((variant) => `${escapeHtml(variant.label)} ${escapeHtml(variant.value)}`).join(' • ')}</div>` : '';
+    }).join('');
+}
+
 function renderAvailableOrders() {
     const approvedSellerIds = state.profile?.approvedSellers || [];
-    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => !order.isDeleted && order.paymentStatus === 'confirmed' && approvedSellerIds.includes(order.sellerId) && order.status === 'ready' && !order.deliveryPersonUid);
+    const available = state.profile?.isActive === false ? [] : state.allOrders.filter((order) => isOrderAvailableForDelivery(order, approvedSellerIds));
     const availableOrdersList = document.getElementById('availableOrdersList');
-    availableOrdersList.innerHTML = available.length ? available.map((order) => {
+    availableOrdersList.innerHTML = available.length ? available.map((order, index) => {
         const isClaiming = state.pendingClaimOrderIds.has(order.id);
         return `
     <div class="item-card">
-      <img src="${getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products')}" alt="${order.items?.[0]?.name || 'Order'}" />
+    <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products')))}" data-full-src="${escapeHtml(getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products'))}" loading="${index < 2 ? 'eager' : 'lazy'}" fetchpriority="${index < 2 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(order.items?.[0]?.name || 'Order')}" />
       <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status || 'accepted'}</span></div>
       <div class="meta-stack">
-        <div class="meta-row"><span>${order.items?.[0]?.name || 'Order'} × ${order.items?.[0]?.quantity || 1}</span><span>${formatCurrency(order.total || 0)}</span></div>
+        <div class="meta-row"><span>${order.items?.[0]?.name || 'Order'} × ${order.items?.[0]?.quantity || 1}</span><span>${order.orderType === 'signup_blind_box' ? `Delivery earning ${formatCurrency(order.deliveryFee || 0, 'LRD')}` : formatCurrency(order.total || 0)}</span></div>
+        ${renderDeliveryOrderVariantDetails(order)}
         <div class="meta-row"><span>${order.address || 'Address unavailable'}</span><span>${order.deliveryLocationLabel || 'Standard'}</span></div>
         <div class="muted">${order.deliveryLandmark || order.deliveryDetails || 'No delivery notes'}</div>
+        <div class="muted">${order.orderType === 'signup_blind_box' ? 'Platform reward · regular delivery' : `Delivery deadline: ${getDeliveryDeadline(order) ? formatDate(getDeliveryDeadline(order)) : '48 hours after ready'}`}</div>
       </div>
       ${renderDeliveryLocationMap(order)}
       <div class="action-row">
@@ -686,17 +830,18 @@ function renderAvailableOrders() {
 function renderActiveDeliveries() {
     const active = state.allOrders.filter((order) => !order.isDeleted && !order.archived && order.deliveryPersonUid === state.authUser?.uid && order.status === 'out_for_delivery');
     const activeDeliveriesList = document.getElementById('activeDeliveriesList');
-    activeDeliveriesList.innerHTML = active.length ? active.map((order) => `
+    activeDeliveriesList.innerHTML = active.length ? active.map((order, index) => `
     <div class="item-card">
-      <img src="${getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products')}" alt="${order.items?.[0]?.name || 'Order'}" />
+    <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products')))}" data-full-src="${escapeHtml(getImagePath(order.items?.[0]?.imagePath || order.items?.[0]?.image || order.items?.[0]?.imageFilename || '', 'products'))}" loading="${index < 2 ? 'eager' : 'lazy'}" fetchpriority="${index < 2 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(order.items?.[0]?.name || 'Order')}" />
       <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status}</span></div>
       <div class="meta-stack">
         <div class="meta-row"><span>${order.customerName || 'Customer'}</span><span>${order.items?.[0]?.name || 'Order'} × ${order.items?.[0]?.quantity || 1}</span></div>
+        ${renderDeliveryOrderVariantDetails(order)}
         <div class="muted">${order.address || 'Address unavailable'}</div>
         <div class="muted">${order.deliveryLandmark || order.deliveryDetails || 'No delivery notes'}</div>
       </div>
       ${renderDeliveryLocationMap(order)}
-    <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
+    <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • ${order.orderType === 'signup_blind_box' ? 'Platform reward · regular delivery' : `Delivery deadline: ${getDeliveryDeadline(order) ? formatDate(getDeliveryDeadline(order)) : '48 hours after ready'}`} • Refund: ${order.refundStatus || 'none'}</div>
       <div class="action-row">
         <button class="primary-btn" data-action="deliver-order" data-id="${order.id}">Delivered</button>
         <button class="ghost-btn" data-action="report-issue" data-id="${order.id}">Report Issue</button>
@@ -716,8 +861,9 @@ function renderHistory() {
     document.getElementById('historyList').innerHTML = history.length ? history.map((order) => `
     <div class="item-card">
       <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status}</span></div>
-      <div class="muted">${order.sellerName || 'Seller'} • ${formatCurrency(order.total || 0)}</div>
+    <div class="muted">${order.sellerName || 'Seller'} • ${order.orderType === 'signup_blind_box' ? `Delivery earning ${formatCurrency(order.deliveryFee || 0, 'LRD')}` : formatCurrency(order.total || 0)}</div>
       <div class="muted">${order.customerName || 'Customer'} • ${formatDate(order.updatedAt || order.createdAt)}</div>
+    ${renderDeliveryOrderVariantDetails(order)}
       <div class="action-row">
         <button class="ghost-btn" data-action="open-chat" data-id="${order.id}">Chat</button>
       </div>
@@ -795,7 +941,7 @@ function renderSellers() {
       <img src="${getImagePath(seller.logo, 'sellers')}" alt="${seller.name}" />
       <div class="panel-card-header"><strong>${seller.name}</strong><span class="badge">Approved</span></div>
       <div class="muted">${seller.location || 'Location unavailable'} • ${seller.category || 'Seller'}</div>
-                <div class="action-row"><button class="danger-btn" data-action="leave-seller" data-id="${seller.id}">Unassign from restaurant</button></div>
+                <div class="action-row"><button class="danger-btn" data-action="leave-seller" data-id="${seller.id}">Unassign from seller</button></div>
     </div>`).join('') : '<div class="empty-state">No approved seller partners yet.</div>';
     document.getElementById('sellersList').innerHTML = state.sellers.length ? state.sellers.map((seller) => `
     <div class="item-card">
@@ -813,7 +959,17 @@ function renderSellers() {
 
 function renderProfile() {
     const profile = state.profile || {};
+    const displayName = profile.displayName || profile.email || 'Delivery Person';
     document.getElementById('profileForm').innerHTML = `
+    <div style="display: flex; gap: 20px; margin-bottom: 20px; align-items: flex-start;">
+      <div style="flex-shrink: 0;">
+        ${getAvatarHtml(displayName, '80px')}
+      </div>
+      <div style="flex: 1;">
+        <p class="muted" style="margin: 0 0 8px 0;">Your profile avatar</p>
+        <p style="font-size: 12px; color: var(--muted); margin: 0;">Shown as ${escapeHtml(displayName)}'s initials</p>
+      </div>
+    </div>
     <label>Name<input id="profileName" value="${profile.displayName || ''}" /></label>
     <label>Phone<input id="profilePhone" value="${profile.phone || ''}" /></label>
     <label>Email<input value="${profile.email || ''}" readonly /></label>
@@ -834,6 +990,10 @@ function renderProfile() {
 function renderSettings() {
     const profile = state.profile || {};
     document.getElementById('settingsContent').innerHTML = `
+        <div class="item-card">
+            <div class="panel-card-header"><strong>Appearance</strong></div>
+            ${renderThemePreferenceControl()}
+        </div>
     <div class="item-card">
       <div class="panel-card-header"><strong>Availability</strong><span class="badge">${profile.isActive ? 'Online' : 'Offline'}</span></div>
     <label><input type="checkbox" id="availabilityToggle" ${profile.isActive !== false ? 'checked' : ''} /> Available for deliveries (turn off for break mode)</label>
@@ -853,6 +1013,11 @@ function renderSettings() {
         <button class="primary-btn" id="savePayoutPreferences">Save payment preferences</button>
       </div>
     </div>`;
+        bindThemePreferenceControl(document.getElementById('settingsContent'), {
+                db,
+                userId: state.authUser?.uid,
+                onError: () => createToast('Theme changed on this device, but could not sync to your account.', 'warning')
+        });
     const availabilityToggle = document.getElementById('availabilityToggle');
     if (availabilityToggle) {
         availabilityToggle.addEventListener('change', () => {
@@ -887,8 +1052,9 @@ function renderNotifications() {
     if (!list) return;
     const visible = state.notifications.filter((item) => !item.isDeleted);
     list.innerHTML = `
-      <div class="action-row" style="margin-bottom: 12px;">
+            <div class="action-row notification-actions" style="margin-bottom: 12px;">
         <button class="ghost-btn" data-clear-all-notifications="true" ${visible.length ? '' : 'disabled'}>Clear all</button>
+                ${renderSoundToggle()}
       </div>
       ${visible.length ? visible.map((item) => `
       <div class="item-card notification-card ${item.read ? '' : 'unread'}">
@@ -903,6 +1069,7 @@ function renderNotifications() {
     list.querySelectorAll('[data-clear-all-notifications]').forEach((button) => {
         button.addEventListener('click', clearAllNotifications);
     });
+    bindSoundToggle(list);
 }
 
 function renderHeaderNotifications() {
@@ -1063,6 +1230,9 @@ async function pickUpOrder(orderId) {
             if (orderData.paymentStatus !== 'confirmed') {
                 throw new Error('This order is waiting for admin payment confirmation.');
             }
+            if (isDeliveryDeadlineExpired(orderData)) {
+                throw new Error('The 48-hour delivery window for this order has expired.');
+            }
             if (!['accepted', 'preparing', 'ready'].includes(orderData.status)) {
                 throw new Error('This order is not available for pickup right now.');
             }
@@ -1080,12 +1250,12 @@ async function pickUpOrder(orderId) {
 
         assignedSuccessfully = true;
         await Promise.all([
-            createNotification(state.authUser.uid, 'Order assigned', 'You picked up an order and it is now in transit.', 'delivery'),
-            order?.customerUid ? createNotification(order.customerUid, 'Order on the way', 'Your order is now on the way with a delivery partner.', 'delivery') : Promise.resolve(),
+            createNotification(state.authUser.uid, 'Order assigned', 'You picked up an order and it is now in transit.', 'delivery', 'delivery_person'),
+            order?.customerUid ? createNotification(order.customerUid, 'Order on the way', 'Your order is now on the way with a delivery partner.', 'delivery', 'customer') : Promise.resolve(),
             order?.sellerId ? (async () => {
                 const seller = state.sellers.find((entry) => entry.id === order.sellerId);
                 if (seller?.ownerUid) {
-                    await createNotification(seller.ownerUid, 'Delivery assigned', 'A delivery partner is now on the way with one of your orders.', 'delivery');
+                    await createNotification(seller.ownerUid, 'Delivery assigned', 'A delivery partner is now on the way with one of your orders.', 'delivery', 'seller');
                 }
             })() : Promise.resolve()
         ]);
@@ -1110,16 +1280,24 @@ async function pickUpOrder(orderId) {
 
 async function markDelivered(orderId) {
     if (!ensureDeliveryProfileComplete()) return false;
+    const order = state.allOrders.find((entry) => entry.id === orderId);
+    if (isDeliveryDeadlineExpired(order)) {
+        createToast('The 48-hour delivery window for this order has expired.', 'warning');
+        return false;
+    }
     try {
         await db.collection('orders').doc(orderId).update({ status: 'delivered', updatedAt: new Date() });
-        const order = state.allOrders.find((entry) => entry.id === orderId);
+        const deliveryEarning = Number(order?.deliveryFee || 0);
+        if (deliveryEarning > 0 && order?.orderType !== 'signup_blind_box') {
+            await creditDeliveryForOrder(state.authUser.uid, deliveryEarning, orderId);
+        }
         if (order?.customerUid) {
-            await createNotification(order.customerUid, 'Delivery completed', 'Your order was delivered successfully.', 'delivery');
+            await createNotification(order.customerUid, 'Delivery completed', 'Your order was delivered successfully.', 'delivery', 'customer');
         }
         if (order?.sellerId) {
             const seller = state.sellers.find((entry) => entry.id === order.sellerId);
             if (seller?.ownerUid) {
-                await createNotification(seller.ownerUid, 'Delivery completed', 'A delivery was completed for your seller.', 'delivery');
+                await createNotification(seller.ownerUid, 'Delivery completed', 'A delivery was completed for your seller.', 'delivery', 'seller');
             }
         }
         createToast('Delivery marked as complete.', 'success');
@@ -1164,14 +1342,10 @@ async function requestDelivery(sellerId) {
         };
         await db.collection('deliveryRequests').add(requestPayload);
         if (seller?.ownerUid) {
-            await db.collection('notifications').add({
-                recipientUid: seller.ownerUid,
+            await createRoleNotification(db, seller.ownerUid, 'seller', {
                 title: 'New delivery request',
                 message: `${requestPayload.deliveryPersonName} wants to join ${seller.name || 'your seller'}.`,
-                type: 'delivery',
-                read: false,
-                isDeleted: false,
-                createdAt: new Date()
+                type: 'delivery'
             });
         }
         createToast('Delivery request sent to the seller.', 'success');
@@ -1410,9 +1584,8 @@ function openSupportModal() {
     document.getElementById('cancelSupport').addEventListener('click', closeModal);
 }
 
-async function createNotification(recipientUid, title, message, type = 'system') {
-    if (!recipientUid) return;
-    await db.collection('notifications').add({ recipientUid, title, message, type, read: false, isDeleted: false, createdAt: new Date() });
+async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '') {
+    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type });
 }
 
 function getImagePath(filename, folder = 'products') {

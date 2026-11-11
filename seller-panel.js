@@ -1,16 +1,31 @@
 import { initStorage, clearStoredAuthState } from './storage.js';
-import { formatCurrency, formatDate, escapeHtml, createToast, copyText, getImageUrl, getSellerImageUrl, getCommunityOptions, isDateInRange, normalizeCurrency } from './utils.js';
+import { formatCurrency, formatDate, escapeHtml, createToast, copyText, getImageUrl, getProductThumbnailUrl, getSellerImageUrl, getCommunityOptions, isDateInRange, normalizeCurrency, confirmDialog, convertCurrency, getAvatarHtml } from './utils.js';
+import { renderExpandableDescription } from './description-utils.js';
+import { createRoleNotification } from './notification-utils.js';
+import { bindSoundToggle, playSoundEffect, renderSoundToggle } from './sound-effects.js';
+
+let sellerNotificationSnapshotReady = false;
 import { DEFAULT_CATEGORY_TAXONOMY, getCategoryDisplayName, getCategoryOptions } from './category-taxonomy.js';
+import { getCategoryVariantConfig, getVariantDisplayEntries } from './category-variants.js';
 import { getQRCardHTML, initQRCode, bindQRDownloadHandlers } from './qr-utils.js';
 import { isAdminOnlyEmail } from './auth.js';
+import { getActiveCatalogPriceRule, getCatalogPriceBreakdown } from './pricing-utils.mjs';
+import { canFulfillCustomizedOrder } from './customization-utils.mjs';
+import { generateLocalListingDraft } from './listing-assistant.mjs';
+import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
+import { watchMaintenanceMode } from './maintenance-mode.js';
 
 const state = {
     authUser: null,
     sellerId: null,
     sellerProfile: null,
     adminWhatsAppNumber: '',
+    adminCatalogPriceRule: null,
+    catalogPriceRuleExpiryTimer: null,
     userProfile: null,
     masterProducts: [],
+    internationalProducts: [],
+    internationalInventory: [],
     menuItems: [],
     categories: [],
     orders: [],
@@ -34,12 +49,13 @@ const state = {
     helpArticles: [],
     financialPayouts: [],
     platformFeePayments: [],
+    walletUnsubscribes: [],
     activeSection: 'dashboard',
     viewMode: 'grid',
     activeOrderChatId: null,
     orderChatMessages: [],
     orderChatUnsubscribe: null,
-    menuFilters: { search: '', category: 'all', availability: 'all', sort: 'name' },
+    menuFilters: { search: '', category: 'all', availability: 'all', sort: 'added' },
     selectedMenuIds: new Set(),
     orderFilter: 'all',
     catalogFilters: { search: '', category: 'all', status: 'all' },
@@ -160,12 +176,147 @@ function ensureFinancialSection() {
     targetShell.appendChild(section);
 }
 
+function ensureSellerWalletSection() {
+    if (document.getElementById('walletSection')) return;
+    const nav = document.querySelector('.nav-links');
+    const button = document.createElement('button');
+    button.className = 'nav-item';
+    button.dataset.section = 'wallet';
+    button.innerHTML = '<span class="nav-icon">$</span><span>Wallet</span>';
+    button.addEventListener('click', () => showSection('wallet'));
+    nav?.appendChild(button);
+    const section = document.createElement('section');
+    section.id = 'walletSection';
+    section.className = 'section-panel';
+    section.innerHTML = `<div class="panel-card"><div class="panel-card-header"><h3>Wallet</h3><span class="badge">Seller balance</span></div><div class="wallet-balance-card"><div class="wbc-label">Available balance</div><div class="wbc-amount" id="sellerBalanceAmount">L$0.00</div><div class="wbc-actions"><button class="primary-btn" id="sellerDepositButton" type="button">Deposit</button><button class="ghost-btn" id="sellerWithdrawButton" type="button">Withdraw</button></div></div><div class="wallet-summary-grid"><div class="summary-item"><div class="summary-label">Total Earnings</div><div class="summary-amount" id="sellerTotalEarnings">L$0.00</div></div><div class="summary-item"><div class="summary-label">Total Deposited</div><div class="summary-amount" id="sellerTotalDeposited">L$0.00</div></div><div class="summary-item"><div class="summary-label">Total Withdrawn</div><div class="summary-amount" id="sellerTotalWithdrawn">L$0.00</div></div><div class="summary-item"><div class="summary-label">Pending Balance</div><div class="summary-amount" id="sellerPendingBalance">L$0.00</div></div></div><div class="wallet-info-bar hidden" id="sellerDepositInfo"></div><form class="wallet-form-card hidden" id="sellerDepositForm"><h4>Submit deposit request</h4><div class="muted">Default payment is USD. Choose the payment method that matches your transfer before submitting.</div><label>Amount (USD default)<input name="amount" type="number" min="1" required /></label><label>Payment method<select name="paymentMethod"><option value="uba_usd" selected>UBA USD Account</option><option value="uba_lrd">UBA LRD Account</option><option value="orange_money">Orange Money</option><option value="lonestar_mobile_money">Lonestar Cell</option></select></label><label>Phone sent from<input name="senderPhone" type="tel" required /></label><label>Payment reference<input name="paymentRef" required /></label><div class="wfc-actions"><button class="primary-btn" type="submit">Submit request</button><button class="ghost-btn" id="cancelSellerDeposit" type="button">Cancel</button></div></form><form class="wallet-form-card hidden" id="sellerWithdrawForm"><h4>Request withdrawal</h4><p class="muted">Your balance will be deducted immediately and held until your request is processed.</p><label>Amount (LRD)<input name="amount" type="number" min="1" required /></label><label>Recipient name<input name="recipientName" required /></label><label>Mobile money number<input name="recipientPhone" type="tel" required /></label><div class="wfc-actions"><button class="primary-btn" type="submit">Request withdrawal</button><button class="ghost-btn" id="cancelSellerWithdraw" type="button">Cancel</button></div></form><div class="wallet-section-block"><h4>Withdrawal requests</h4><div id="sellerWithdrawalsList"></div></div><div class="wallet-section-block"><h4>Transaction history</h4><div id="sellerTransactionsList"></div></div></div>`;
+    document.querySelector('.main-panel')?.appendChild(section);
+    document.getElementById('sellerDepositButton')?.addEventListener('click', () => { document.getElementById('sellerDepositForm')?.classList.remove('hidden'); document.getElementById('sellerWithdrawForm')?.classList.add('hidden'); });
+    document.getElementById('sellerWithdrawButton')?.addEventListener('click', () => { document.getElementById('sellerWithdrawForm')?.classList.remove('hidden'); document.getElementById('sellerDepositForm')?.classList.add('hidden'); });
+    document.getElementById('cancelSellerDeposit')?.addEventListener('click', () => document.getElementById('sellerDepositForm')?.classList.add('hidden'));
+    document.getElementById('cancelSellerWithdraw')?.addEventListener('click', () => document.getElementById('sellerWithdrawForm')?.classList.add('hidden'));
+    document.getElementById('sellerDepositForm')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        withButtonState(button, async () => { const paymentMethod = data.paymentMethod || ''; const paymentCurrency = data.paymentCurrency || 'USD'; if (!paymentMethod) throw new Error('No payment method is configured for this currency.'); await submitDepositRequest(state.sellerId, 'seller', state.sellerProfile?.name || state.sellerProfile?.businessName, state.sellerProfile?.email || '', data.amount, data.paymentRef, data.senderPhone, paymentMethod, paymentCurrency); event.currentTarget.reset(); event.currentTarget.classList.add('hidden'); }, { loadingText: 'Submitting...', successText: 'Request sent', permanent: false });
+    });
+    document.getElementById('sellerWithdrawForm')?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const button = event.currentTarget.querySelector('button[type="submit"]');
+        const data = Object.fromEntries(new FormData(event.currentTarget));
+        withButtonState(button, async () => { await submitWithdrawalRequest(state.sellerId, 'seller', state.sellerProfile?.name || state.sellerProfile?.businessName, data.amount, data.recipientName, data.recipientPhone); event.currentTarget.reset(); event.currentTarget.classList.add('hidden'); }, { loadingText: 'Submitting...', successText: 'Request placed', permanent: false });
+    });
+}
+
+async function initSellerWallet() {
+    ensureSellerWalletSection();
+    await autoReceiveOldWithdrawals(state.sellerId);
+    const config = await loadWalletConfig();
+    const depositForm = document.getElementById('sellerDepositForm');
+    let currencySelect = depositForm?.querySelector('select[name="paymentCurrency"]');
+    if (depositForm && !currencySelect) {
+        currencySelect = document.createElement('select');
+        currencySelect.name = 'paymentCurrency';
+        currencySelect.innerHTML = '<option value="USD">USD</option><option value="LRD">LRD</option>';
+        const methodField = depositForm.querySelector('select[name="paymentMethod"]')?.closest('label');
+        const currencyLabel = Object.assign(document.createElement('label'), { textContent: 'Deposit currency' });
+        currencyLabel.appendChild(currencySelect);
+        methodField?.before(currencyLabel);
+    }
+    const methodSelect = depositForm?.querySelector('select[name="paymentMethod"]');
+    const methodField = methodSelect?.closest('label');
+    const methodCards = document.createElement('div');
+    methodCards.className = 'payment-method-selector compact-payment-methods';
+    methodCards.setAttribute('role', 'radiogroup');
+    methodCards.setAttribute('aria-label', 'Deposit payment method');
+    const methodValue = document.createElement('input');
+    methodValue.type = 'hidden';
+    methodValue.name = 'paymentMethod';
+    methodSelect?.replaceWith(methodValue);
+    methodField?.after(methodCards);
+    const preview = document.createElement('img');
+    preview.dataset.depositMethodImage = 'true';
+    preview.style.cssText = 'width:48px;height:48px;object-fit:contain;border-radius:10px;margin:8px 0;';
+    methodSelect?.after(preview);
+    const updateDepositMethods = () => {
+        const methods = window.getConfiguredDepositMethods?.(config, currencySelect?.value || 'USD') || [];
+        methodCards.innerHTML = methods.length ? methods.map((method, index) => `<label class="payment-method-option compact-payment-method ${index === 0 ? 'selected' : ''}"><input type="radio" name="sellerDepositMethodChoice" value="${escapeHtml(method.value)}" ${index === 0 ? 'checked' : ''} /><img src="${escapeHtml(method.image || './images/logo/marketplace-logo.svg')}" alt="${escapeHtml(method.label)}" /><span>${escapeHtml(method.label)}</span><small>${escapeHtml(method.details)}</small></label>`).join('') : '<div class="muted">No payment method configured</div>';
+        methodValue.value = methods[0]?.value || '';
+        methodCards.querySelectorAll('input').forEach((input) => input.addEventListener('change', () => { methodValue.value = input.value; methodCards.querySelectorAll('.payment-method-option').forEach((card) => card.classList.toggle('selected', card.contains(input))); }));
+        if (preview) { preview.src = methods[0]?.image || './images/logo/marketplace-logo.svg'; preview.alt = methods[0]?.label || 'Payment method'; }
+    };
+    currencySelect?.addEventListener('change', updateDepositMethods);
+    methodCards.addEventListener('change', (event) => { const method = (window.getConfiguredDepositMethods?.(config, currencySelect?.value || 'USD') || []).find((entry) => entry.value === event.target.value); if (preview) { preview.src = method?.image || './images/logo/marketplace-logo.svg'; preview.alt = method?.label || 'Payment method'; } });
+    updateDepositMethods();
+    const info = document.getElementById('sellerDepositInfo');
+    if (config.adminMobileNumber && info) { info.innerHTML = `<strong>Deposit instructions:</strong> Send mobile money to ${escapeHtml(config.adminMobileName || 'Manna Marketplace')} at ${escapeHtml(config.adminMobileNumber)}, then submit your reference.`; info.classList.remove('hidden'); }
+    state.walletUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    state.walletUnsubscribes = [
+        db.collection('sellers').doc(state.sellerId).onSnapshot((snapshot) => { const data = snapshot.data() || {}; const balance = Number(data.balance || 0); const balanceUSD = Number(data.balanceUSD || 0); const element = document.getElementById('sellerBalanceAmount'); if (element) element.textContent = `L$${balance.toLocaleString('en-LR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} • $${balanceUSD.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }),
+        db.collection('withdrawalRequests').where('userId', '==', state.sellerId).orderBy('createdAt', 'desc').onSnapshot((snapshot) => renderWalletRequests('sellerWithdrawalsList', snapshot.docs)),
+    ];
+    
+    // Load and display transaction statistics
+    const transactions = await loadTransactionHistory(state.sellerId);
+    const container = document.getElementById('sellerTransactionsList');
+    if (container) container.innerHTML = transactions.length ? transactions.map((transaction) => `<div class="wallet-tx-row"><span>${escapeHtml(transaction.description || transaction.type)}</span><strong class="${transaction.amount >= 0 ? 'amount-credit' : 'amount-debit'}">${transaction.amount >= 0 ? '+' : '-'}${formatLRD(Math.abs(transaction.amount))}</strong></div>`).join('') : '<div class="empty-state">No transactions yet.</div>';
+    
+    // Calculate wallet summary statistics
+    const depositTransactions = transactions.filter((t) => t.type === 'deposit' && t.amount > 0);
+    const withdrawalTransactions = transactions.filter((t) => t.type === 'withdrawal' && t.amount < 0);
+    const earningTransactions = transactions.filter((t) => t.type === 'order_earning' && t.amount > 0);
+    const totalDeposited = depositTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const totalWithdrawn = Math.abs(withdrawalTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0));
+    const totalEarnings = earningTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    
+    // Get pending withdrawals
+    const withdrawalsSnapshot = await db.collection('withdrawalRequests').where('userId', '==', state.sellerId).where('status', '==', 'pending').get();
+    const pendingBalance = withdrawalsSnapshot.docs.reduce((sum, doc) => sum + Number(doc.data().amount || 0), 0);
+    
+    // Update summary displays
+    const summaryElements = {
+        'sellerTotalDeposited': totalDeposited,
+        'sellerTotalWithdrawn': totalWithdrawn,
+        'sellerTotalEarnings': totalEarnings,
+        'sellerPendingBalance': pendingBalance
+    };
+    
+    Object.entries(summaryElements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = formatLRD(value);
+    });
+}
+
+function renderWalletRequests(containerId, docs) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = docs.length ? docs.map((doc) => { const item = doc.data(); return `<div class="wallet-tx-row"><span>${formatLRD(item.amount)} to ${escapeHtml(item.recipientPhone)}</span><span class="status-badge status-${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>${item.status === 'paid' ? `<button class="ghost-btn wallet-confirm-received" data-id="${doc.id}" type="button">Confirm received</button>` : ''}</div>`; }).join('') : '<div class="empty-state">No withdrawal requests yet.</div>';
+    container.querySelectorAll('.wallet-confirm-received').forEach((button) => button.addEventListener('click', () => withButtonState(button, () => db.collection('withdrawalRequests').doc(button.dataset.id).update({ status: 'received', receivedAt: new Date() }), { loadingText: 'Confirming...', successText: 'Received', permanent: true })));
+}
+
+function ensureInternationalSection() {
+    if (document.querySelector('[data-section="international-products"]')) return;
+    const addButton = (container, className = 'nav-item') => {
+        if (!container) return;
+        const button = document.createElement('button');
+        button.className = className;
+        button.setAttribute('data-section', 'international-products');
+        button.innerHTML = '<span class="nav-icon">$</span><span>International Products</span>';
+        button.addEventListener('click', () => showSection('international-products'));
+        container.appendChild(button);
+    };
+    addButton(document.querySelector('.nav-links'));
+    addButton(document.querySelector('.mobile-nav-list'), 'nav-item mobile-nav-item');
+}
+
 function init() {
     bindEvents();
+    ensureSellerWalletSection();
     const storageApi = initStorage();
     storage = storageApi;
     auth = storageApi.auth;
     db = storageApi.db;
+    watchMaintenanceMode(db);
     if (auth) {
         auth.setPersistence().catch(() => { });
     }
@@ -178,6 +329,7 @@ function init() {
 
 function bindEvents() {
     ensureFinancialSection();
+    ensureInternationalSection();
     loginForm?.addEventListener('submit', handleLogin);
     registerForm?.addEventListener('submit', handleRegister);
     showRegisterButton?.addEventListener('click', () => toggleAuthMode(true));
@@ -510,6 +662,7 @@ async function handleRegister(event) {
             mobileMoneyNumber: '',
             orangeMoneyNumber: '',
             lonestarMoneyNumber: '',
+            balance: 0,
             status: 'pending',
             isActive: true,
             createdAt: new Date(),
@@ -666,6 +819,7 @@ async function handleAuthStateChange(user) {
         }
 
         const userData = userDoc.exists ? userDoc.data() : {};
+        applyThemePreference(userData);
         const role = userData.role || 'seller';
         if (isAdminOnlyEmail(user.email) || role !== 'seller') {
             authMessage.textContent = 'This account is not authorized for the seller panel.';
@@ -718,6 +872,7 @@ async function handleAuthStateChange(user) {
         appShell.classList.remove('hidden');
         showSection('dashboard');
         await loadSellerData();
+        await initSellerWallet();
     } catch (error) {
         console.error(error);
         createToast(error.message || 'Could not initialize seller dashboard.', 'error');
@@ -725,6 +880,12 @@ async function handleAuthStateChange(user) {
 }
 
 function cleanupListeners() {
+    sellerNotificationSnapshotReady = false;
+    state.notifications = [];
+    state.walletUnsubscribes.forEach((unsubscribe) => unsubscribe());
+    state.walletUnsubscribes = [];
+    if (state.catalogPriceRuleExpiryTimer) window.clearTimeout(state.catalogPriceRuleExpiryTimer);
+    state.catalogPriceRuleExpiryTimer = null;
     [state.sellerDocUnsubscribe, state.adminSettingsUnsubscribe, state.deliveryUsersUnsubscribe, state.menuUnsubscribe, state.ordersUnsubscribe, state.reviewsUnsubscribe, state.promotionsUnsubscribe, state.couponsUnsubscribe, state.notificationsUnsubscribe, state.settingsUnsubscribe, state.chatsUnsubscribe, state.categoriesUnsubscribe, state.orderChatUnsubscribe].forEach((unsubscribe) => {
         if (unsubscribe) unsubscribe();
     });
@@ -762,8 +923,22 @@ function setupRealtimeListeners() {
         console.error('[Manna Marketplace] Seller profile listener failed:', error);
     });
     state.adminSettingsUnsubscribe = db.collection('adminSettings').doc('config').onSnapshot((doc) => {
-        state.adminWhatsAppNumber = doc.exists ? String(doc.data()?.adminWhatsAppNumber || '').trim() : '';
+        const settings = doc.exists ? doc.data() || {} : {};
+        const nextRule = getActiveCatalogPriceRule(settings);
+        const ruleChanged = JSON.stringify(nextRule) !== JSON.stringify(state.adminCatalogPriceRule);
+        if (state.catalogPriceRuleExpiryTimer) window.clearTimeout(state.catalogPriceRuleExpiryTimer);
+        state.catalogPriceRuleExpiryTimer = null;
+        state.adminCatalogPriceRule = nextRule;
+        const expiresAt = Date.parse(nextRule?.expiresAt || '');
+        if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+            state.catalogPriceRuleExpiryTimer = window.setTimeout(() => {
+                state.adminCatalogPriceRule = getActiveCatalogPriceRule(settings);
+                renderAll();
+            }, Math.min(expiresAt - Date.now() + 50, 2147483647));
+        }
+        state.adminWhatsAppNumber = String(settings.adminWhatsAppNumber || '').trim();
         renderHelpSession();
+        if (ruleChanged) renderAll();
     }, (error) => {
         console.error('[Manna Marketplace] Admin settings listener failed:', error);
     });
@@ -808,8 +983,19 @@ function setupRealtimeListeners() {
     });
     const recipientUid = state.authUser?.uid;
     if (recipientUid) {
-        state.notificationsUnsubscribe = db.collection('notifications').where('recipientUid', '==', recipientUid).orderBy('createdAt', 'desc').onSnapshot((snapshot) => {
-            state.notifications = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+        state.notificationsUnsubscribe = db.collection('notifications').where('recipientUid', '==', recipientUid).orderBy('createdAt', 'desc').onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+            const notifications = snapshot.docs
+                .map((doc) => ({ id: doc.id, ...doc.data() }))
+                .filter((item) => !item.recipientRole || item.recipientRole === 'seller')
+                .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            if (sellerNotificationSnapshotReady && !snapshot.metadata.fromCache) {
+                const existingIds = new Set(state.notifications.map((item) => item.id));
+                if (notifications.some((item) => !item.read && !item.isDeleted && !existingIds.has(item.id))) {
+                    playSoundEffect('notification');
+                }
+            }
+            state.notifications = notifications;
+            if (!snapshot.metadata.fromCache) sellerNotificationSnapshotReady = true;
             renderNotifications();
         }, (error) => {
             console.error('[Manna Marketplace] Seller notifications listener failed:', error);
@@ -867,21 +1053,11 @@ function setupRealtimeListeners() {
 async function loadSellerData() {
     if (!state.sellerId) return;
     try {
-        await Promise.all([
-            loadProfile(),
-            loadMasterProducts(),
-            loadCategories(),
-            loadMenuItems(),
-            loadOrders(),
-            loadReviews(),
-            loadPromotions(),
-            loadCoupons(),
-            loadNotifications(),
-            loadSettings(),
-            loadChats(),
-            loadDeliveryRequests()
-        ]);
         setupRealtimeListeners();
+        await Promise.all([
+            loadMasterProducts(),
+            loadInternationalProducts()
+        ]);
         renderAll();
     } catch (error) {
         console.error(error);
@@ -900,6 +1076,15 @@ async function loadMasterProducts() {
     const snapshot = await db.collection('masterProducts').where('status', '==', 'active').get();
     state.masterProducts = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     renderCatalogFilters();
+}
+
+async function loadInternationalProducts() {
+    const [offers, inventory] = await Promise.all([
+        db.collection('internationalProducts').where('status', '==', 'active').get(),
+        db.collection('sellers').doc(state.sellerId).collection('internationalInventory').get()
+    ]);
+    state.internationalProducts = offers.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    state.internationalInventory = inventory.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }
 
 async function loadCategories() {
@@ -939,7 +1124,10 @@ async function loadNotifications() {
         return;
     }
     const snapshot = await db.collection('notifications').where('recipientUid', '==', state.authUser.uid).orderBy('createdAt', 'desc').get();
-    state.notifications = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    state.notifications = snapshot.docs
+        .map((doc) => ({ id: doc.id, ...doc.data() }))
+        .filter((item) => !item.recipientRole || item.recipientRole === 'seller')
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 }
 
 async function loadDeliveryRequests() {
@@ -1085,9 +1273,23 @@ function renderCatalogFilters() {
     categoryFilter.innerHTML = '<option value="all">All categories</option>' + categories.map((category) => `<option value="${category}">${category}</option>`).join('');
 }
 
+function getSellerMenuDisplayPrice(item) {
+    if (!item.masterProductId || item.isSellerOwned === true || item.orderFlow === 'seller_owned') {
+        return Number(item.priceInLRD ?? item.price ?? 0);
+    }
+    const sellerMarkup = Number(item.sellerMarkup || 0);
+    const basePrice = Number(item.defaultPrice ?? Math.max(0, Number(item.price || 0) - sellerMarkup));
+    const pricing = getCatalogPriceBreakdown(basePrice, sellerMarkup, state.adminCatalogPriceRule, item.category);
+    return convertCurrency(pricing.totalPrice, 'LRD', normalizeCurrency(item.currency));
+}
+
 function renderCategoryFilters() {
     const menuCategoryFilter = document.getElementById('menuCategoryFilter');
-    menuCategoryFilter.innerHTML = '<option value="all">All categories</option>' + state.categories.map((category) => `<option value="${category.name}">${category.name}</option>`).join('');
+    if (!menuCategoryFilter) return;
+    const categories = [...new Set(state.menuItems.map((item) => String(item.category || '').trim()).filter(Boolean))].sort((first, second) => first.localeCompare(second));
+    if (state.menuFilters.category !== 'all' && !categories.includes(state.menuFilters.category)) state.menuFilters.category = 'all';
+    menuCategoryFilter.innerHTML = '<option value="all">All categories</option>' + categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join('');
+    menuCategoryFilter.value = state.menuFilters.category;
 }
 
 function renderCatalog() {
@@ -1100,14 +1302,17 @@ function renderCatalog() {
         const matchesStatus = status === 'all' || (status === 'active' ? product.status === 'active' : product.status !== 'active');
         return matchesSearch && matchesCategory && matchesStatus;
     });
-    document.getElementById('catalogGrid').innerHTML = products.length ? products.map((product) => `
+    const addedMasterProductIds = new Set(state.menuItems.map((item) => item.masterProductId).filter(Boolean));
+    products.sort((first, second) => Number(addedMasterProductIds.has(first.id)) - Number(addedMasterProductIds.has(second.id)));
+    document.getElementById('catalogGrid').innerHTML = products.length ? products.map((product, index) => `
     <div class="menu-item-card">
-      <img src="${getImageUrl(product.imageFilename || product.image || '')}" alt="${product.name}" onerror="this.src='./images/placeholder.png'" />
+    <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(product.imageFilename || product.image || ''))}" data-full-src="${escapeHtml(getImageUrl(product.imageFilename || product.image || ''))}" loading="${index < 4 ? 'eager' : 'lazy'}" fetchpriority="${index < 2 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(product.name)}" />
       <div class="panel-card-header">
         <strong>${product.name}</strong>
         <span class="badge">${product.category || 'General'}</span>
       </div>
-      <div class="muted">${product.description || 'A fresh menu option ready for your store.'}</div>
+            <div class="muted">Current catalog price: ${formatCurrency(getCatalogPriceBreakdown(product.defaultPrice ?? product.standardPrice ?? product.price ?? 0, product.sellerMarkup || 0, state.adminCatalogPriceRule, product.category).totalPrice, 'LRD')}</div>
+    ${renderExpandableDescription(product.description || 'A fresh menu option ready for your store.')}
       <div class="modal-actions">
         <button class="primary-btn" data-add-product="${product.id}">Add to My Store</button>
       </div>
@@ -1127,7 +1332,51 @@ function renderCatalog() {
     });
 }
 
+function renderInternationalCatalog() {
+    const catalog = document.getElementById('catalogGrid');
+    if (!catalog) return;
+    catalog.innerHTML = state.internationalProducts.length ? state.internationalProducts.map((product) => {
+        const owned = state.internationalInventory.find((item) => item.internationalProductId === product.id);
+        return `<div class="menu-item-card"><div class="panel-card-header"><strong>${escapeHtml(product.name)}</strong><span class="badge">${formatCurrency(product.wholesalePrice || 0, product.currency || 'USD')}</span></div>${renderExpandableDescription(product.description || 'International wholesale product')}<div class="muted">Minimum quantity: ${Number(product.minimumQuantity || 1)}</div><div class="modal-actions"><button class="primary-btn" data-buy-international="${product.id}" ${owned ? 'disabled' : ''}>${owned ? 'Purchased' : 'Buy for resale'}</button>${owned ? `<button class="ghost-btn" data-edit-international="${owned.id}">Edit resale details</button>` : ''}</div></div>`;
+    }).join('') : '<div class="empty-state">No international products are available yet.</div>';
+    catalog.querySelectorAll('[data-buy-international]').forEach((button) => button.addEventListener('click', () => buyInternationalProduct(button.dataset.buyInternational)));
+    catalog.querySelectorAll('[data-edit-international]').forEach((button) => button.addEventListener('click', () => editInternationalInventory(button.dataset.editInternational)));
+}
+
+async function buyInternationalProduct(productId) {
+    const product = state.internationalProducts.find((item) => item.id === productId);
+    if (!product) return;
+    const quantity = Number(window.prompt(`Quantity to buy (minimum ${product.minimumQuantity || 1})`, product.minimumQuantity || 1));
+    if (!Number.isInteger(quantity) || quantity < Number(product.minimumQuantity || 1)) {
+        createToast('Enter a valid quantity at or above the minimum.', 'warning');
+        return;
+    }
+    const master = state.masterProducts.find((item) => item.id === product.masterProductId) || {};
+    await db.collection('sellers').doc(state.sellerId).collection('internationalInventory').add({ internationalProductId: product.id, masterProductId: product.masterProductId, name: product.name || master.name, sourceDescription: product.description || master.description || '', image: master.image || master.imageFilename || '', imageFilename: master.imageFilename || master.image || '', purchasePrice: Number(product.wholesalePrice || 0), purchaseCurrency: product.currency || 'USD', quantity, resalePrice: Number(product.wholesalePrice || 0), resaleCurrency: product.currency || 'USD', resaleDescription: product.description || master.description || '', status: 'active', purchasedAt: new Date(), createdAt: new Date(), updatedAt: new Date() });
+    await loadInternationalProducts();
+    renderInternationalCatalog();
+    createToast('International product added to your resale inventory.', 'success');
+}
+
+function editInternationalInventory(inventoryId) {
+    const item = state.internationalInventory.find((entry) => entry.id === inventoryId);
+    if (!item) return;
+    modalTitle.textContent = 'Edit Resale Product';
+    modalBody.innerHTML = `<form id="internationalInventoryForm" class="form-grid"><label>Resale Price<input name="resalePrice" type="number" min="0" step="0.01" value="${item.resalePrice || 0}" /></label><label>Currency<select name="resaleCurrency"><option value="USD" ${item.resaleCurrency !== 'LRD' ? 'selected' : ''}>USD</option><option value="LRD" ${item.resaleCurrency === 'LRD' ? 'selected' : ''}>LRD</option></select></label><label>Quantity<input name="quantity" type="number" min="0" value="${item.quantity || 0}" /></label><label class="full">Resale Details<textarea name="resaleDescription">${escapeHtml(item.resaleDescription || '')}</textarea></label></form>`;
+    modalActions.innerHTML = '<button class="ghost-btn" id="cancelEditor">Cancel</button><button class="primary-btn" id="saveInternationalInventory">Save</button>';
+    modalBackdrop.classList.remove('hidden');
+    document.getElementById('saveInternationalInventory').addEventListener('click', async () => {
+        const data = Object.fromEntries(new FormData(document.getElementById('internationalInventoryForm')));
+        await db.collection('sellers').doc(state.sellerId).collection('internationalInventory').doc(inventoryId).update({ resalePrice: Number(data.resalePrice || 0), resaleCurrency: data.resaleCurrency, quantity: Number(data.quantity || 0), resaleDescription: data.resaleDescription || '', updatedAt: new Date() });
+        closeModal();
+        await loadInternationalProducts();
+        renderInternationalCatalog();
+    });
+    document.getElementById('cancelEditor').addEventListener('click', closeModal);
+}
+
 function renderMenu() {
+    renderCategoryFilters();
     const filtered = state.menuItems.filter((item) => {
         const term = `${item.sellerDescription || ''} ${item.sellerTags?.join(' ') || ''}`.toLowerCase();
         const matchesSearch = !state.menuFilters.search || term.includes(state.menuFilters.search) || (item.name || '').toLowerCase().includes(state.menuFilters.search);
@@ -1138,7 +1387,10 @@ function renderMenu() {
     const sorted = [...filtered].sort((first, second) => {
         if (state.menuFilters.sort === 'price') return (first.price || 0) - (second.price || 0);
         if (state.menuFilters.sort === 'popularity') return (second.popularity || 0) - (first.popularity || 0);
-        return (first.name || '').localeCompare(second.name || '');
+        if (state.menuFilters.sort === 'name') return (first.name || '').localeCompare(second.name || '');
+        const firstCreatedAt = getMenuItemCreatedAt(first);
+        const secondCreatedAt = getMenuItemCreatedAt(second);
+        return secondCreatedAt - firstCreatedAt;
     });
     const content = document.getElementById('menuContent');
     if (state.viewMode === 'list') {
@@ -1150,26 +1402,30 @@ function renderMenu() {
             <div>
               <strong>${item.name || 'Untitled item'}</strong>
               <div class="muted">${item.category || 'General'}</div>
+                            <div class="muted">${formatCurrency(getSellerMenuDisplayPrice(item), item.currency || 'LRD')}</div>
             </div>
-            <div>${formatCurrency(item.price || 0, item.currency)}</div>
+            <div>${formatCurrency(item.price || 0, item.isSellerOwned === true ? item.currency : 'LRD')}</div>
             <label><input type="checkbox" data-toggle-availability="${item.id}" ${item.availability ? 'checked' : ''} /> Available</label>
             <button class="ghost-btn" data-edit-menu="${item.id}">Edit</button>
             <button class="ghost-btn" data-share-menu="${item.id}">Share link</button>
+            <button class="danger-btn" data-delete-menu="${item.id}">Remove from store</button>
           </div>`).join('')}
     </div>` : '<div class="empty-state">Your store is empty.</div>';
     } else {
-        content.innerHTML = sorted.length ? sorted.map((item) => `
+                content.innerHTML = sorted.length ? sorted.map((item, index) => `
       <div class="menu-item-card">
-        <img src="${getImageUrl(item.imageFilename || item.image || '')}" alt="${item.name || 'Menu item'}" onerror="this.src='./images/placeholder.png'" />
+                <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(item.imageFilename || item.image || ''))}" data-full-src="${escapeHtml(getImageUrl(item.imageFilename || item.image || ''))}" loading="${index < 4 ? 'eager' : 'lazy'}" fetchpriority="${index < 2 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(item.name || 'Menu item')}" />
         <div class="panel-card-header">
           <strong>${item.name || 'Untitled item'}</strong>
           <span class="badge">${item.category || 'General'}</span>
         </div>
-        <div class="muted">${item.sellerDescription || 'Custom seller description'}</div>
+                <div class="muted">${formatCurrency(getSellerMenuDisplayPrice(item), item.currency || 'LRD')}</div>
+        ${renderExpandableDescription(item.sellerDescription || 'Custom seller description')}
         <div class="modal-actions">
           <label class="badge"><input type="checkbox" data-toggle-availability="${item.id}" ${item.availability ? 'checked' : ''} /> Available</label>
           <button class="ghost-btn" data-edit-menu="${item.id}">Edit</button>
           <button class="ghost-btn" data-share-menu="${item.id}">Share link</button>
+          <button class="danger-btn" data-delete-menu="${item.id}">Remove from store</button>
         </div>
     </div>`).join('') : '<div class="empty-state">Your store is empty.</div>';
     }
@@ -1182,6 +1438,9 @@ function renderMenu() {
     document.querySelectorAll('[data-share-menu]').forEach((button) => {
         button.addEventListener('click', () => shareMenuItem(button.dataset.shareMenu));
     });
+    document.querySelectorAll('[data-delete-menu]').forEach((button) => {
+        button.addEventListener('click', () => deleteMenuItem(button.dataset.deleteMenu));
+    });
     document.querySelectorAll('[data-select-menu]').forEach((checkbox) => {
         checkbox.addEventListener('change', (event) => {
             if (event.target.checked) state.selectedMenuIds.add(event.target.dataset.selectMenu);
@@ -1190,8 +1449,16 @@ function renderMenu() {
     });
 }
 
+function getMenuItemCreatedAt(item) {
+    const createdAt = item.createdAt;
+    if (typeof createdAt?.toMillis === 'function') return createdAt.toMillis();
+    if (Number.isFinite(createdAt?.seconds)) return createdAt.seconds * 1000;
+    const timestamp = new Date(createdAt || 0).getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function getMenuItemShareUrl(menuId) {
-    const shareUrl = new URL('./', window.location.href);
+    const shareUrl = new URL('https://celadon-kleicha-be1d68.netlify.app/');
     shareUrl.searchParams.set('sellerId', state.sellerId);
     shareUrl.searchParams.set('productId', menuId);
     return shareUrl.href;
@@ -1221,7 +1488,13 @@ function renderOrders() {
         <span class="badge">${currentStatus}</span>
       </div>
       <div class="muted">${formatCurrency(order.total || 0)} • ${order.address || 'No address provided'}</div>
-      ${order.items?.length ? `<img src="${getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || '')}" alt="${order.items[0]?.name || 'Item'}" style="width:64px;height:64px;object-fit:cover;border-radius:12px;margin-top:8px;" onerror="this.src='./images/placeholder.png'" />` : ''}
+    ${(Array.isArray(order.items) ? order.items : []).map((item) => {
+        const variants = getVariantDisplayEntries(item);
+        return variants.length ? `<div class="muted">${escapeHtml(item.name || 'Item')}: ${variants.map((variant) => `${escapeHtml(variant.label)} ${escapeHtml(variant.value)}`).join(' • ')}</div>` : '';
+    }).join('')}
+    ${order.items?.length ? `<img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" data-full-src="${escapeHtml(getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" loading="lazy" decoding="async" alt="${escapeHtml(order.items[0]?.name || 'Item')}" style="width:64px;height:64px;object-fit:cover;border-radius:12px;margin-top:8px;" />` : ''}
+    ${order.customizationRequested ? `<div class="customization-order-panel"><strong>Customized order</strong><div class="muted">${escapeHtml(order.customizationDetails || 'Customer will send design details through admin WhatsApp.')}</div><div class="muted">Customization fee: ${order.customizationFeePaymentStatus === 'waived' ? 'Waived' : order.customizationFeePaymentStatus === 'paid' ? 'Paid' : 'Awaiting admin/customer payment confirmation'}</div></div>` : ''}
+    ${order.customizationRequested && !canFulfillCustomizedOrder(order) ? '<div class="muted">This order stays on hold until the customization fee is confirmed.</div>' : ''}
       <div class="muted">Delivery: ${order.deliveryLocationLabel || 'Standard'} • ${order.deliveryLandmark || order.deliveryDetails || 'No landmark provided'}</div>
     <div class="muted">Payment: ${order.paymentMethod || 'pending'} • Phone: ${order.paymentPhone || order.customerPhone || '—'} • Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'}</div>
       <div class="muted">Partner: ${order.deliveryPersonName || (order.deliveryPersonUid ? 'Assigned delivery person' : 'Awaiting assignment')} • Refund: ${order.refundStatus || 'none'}${order.refundRequested ? ' • requested by customer' : ''}</div>
@@ -1266,23 +1539,39 @@ function renderReviews() {
 }
 
 function renderPromotions() {
-    document.getElementById('promotionsList').innerHTML = state.promotions.length ? state.promotions.map((promotion) => `
+        const eligibleProducts = state.menuItems.filter((item) => item.masterProductId && item.isSellerOwned !== true && Number(item.defaultPrice || 0) > 0 && Number(item.sellerMarkup || 0) > 0);
+        document.getElementById('promotionsList').innerHTML = state.promotions.length ? state.promotions.map((promotion) => {
+                const scopeLabel = promotion.scope === 'selected'
+                        ? (promotion.productIds || []).map((productId) => eligibleProducts.find((item) => item.id === productId)?.name).filter(Boolean).join(', ') || 'Selected products'
+                        : 'All eligible products';
+                return `
     <div class="promotion-card">
-      <strong>${promotion.title || 'Promotion'}</strong>
-      <div class="muted">${promotion.description || ''}</div>
-      <div class="badge">${promotion.type || 'discount'}</div>
-    </div>`).join('') : '<div class="empty-state">No promotions yet.</div>';
+            <strong>${escapeHtml(promotion.title || 'Promotion')}</strong>
+            <div class="muted">${escapeHtml(promotion.description || '')}</div>
+            <div class="badge">${Number(promotion.discountPercent || 0)}% off seller profit</div>
+            <div class="muted">${escapeHtml(scopeLabel)}</div>
+            <div class="muted">${escapeHtml(promotion.validFrom || 'Now')} to ${escapeHtml(promotion.validUntil || 'No end date')} · ${escapeHtml(promotion.status || 'active')}</div>
+        </div>`;
+        }).join('') : '<div class="empty-state">No promotions yet.</div>';
 }
 
 function renderCoupons() {
-    document.getElementById('couponsList').innerHTML = state.coupons.length ? state.coupons.map((coupon) => `
+        const eligibleProducts = state.menuItems.filter((item) => item.masterProductId && item.isSellerOwned !== true && Number(item.defaultPrice || 0) > 0 && Number(item.sellerMarkup || 0) > 0);
+        document.getElementById('couponsList').innerHTML = state.coupons.length ? state.coupons.map((coupon) => {
+                const scopeLabel = coupon.scope === 'selected'
+                        ? (coupon.productIds || []).map((productId) => eligibleProducts.find((item) => item.id === productId)?.name).filter(Boolean).join(', ') || 'Selected products'
+                        : 'All eligible products';
+                return `
     <div class="coupon-card">
       <div class="panel-card-header">
-        <strong>${coupon.code}</strong>
-        <span class="badge">${coupon.status || 'active'}</span>
+                <strong>${escapeHtml(coupon.code || '')}</strong>
+                <span class="badge">${escapeHtml(coupon.status || 'active')}</span>
       </div>
-      <div class="muted">${coupon.type === 'percentage' ? `${coupon.value}%` : formatCurrency(coupon.value)} off</div>
-    </div>`).join('') : '<div class="empty-state">No coupons yet.</div>';
+            <div class="muted">${coupon.type === 'percentage' ? `${Number(coupon.value)}% of seller profit` : `${formatCurrency(Number(coupon.value || 0), 'LRD')} from seller profit`}</div>
+            <div class="muted">${escapeHtml(scopeLabel)}</div>
+            <div class="muted">Minimum ${formatCurrency(Number(coupon.minimumOrderValue || 0), 'LRD')} · Expires ${escapeHtml(coupon.expiryDate || 'Never')}</div>
+        </div>`;
+        }).join('') : '<div class="empty-state">No coupons yet.</div>';
 }
 
 function renderNotifications() {
@@ -1290,8 +1579,9 @@ function renderNotifications() {
     updateNotificationBadge();
     document.getElementById('notificationBadge').textContent = `${visible.filter((item) => !item.read).length} unread`;
     document.getElementById('notificationsList').innerHTML = `
-      <div class="action-row" style="margin-bottom: 12px;">
+            <div class="action-row notification-actions" style="margin-bottom: 12px;">
         <button class="ghost-btn" data-clear-all-notifications="true" ${visible.length ? '' : 'disabled'}>Clear all</button>
+                ${renderSoundToggle()}
       </div>
       ${visible.length ? visible.map((item) => `
       <div class="list-item">
@@ -1311,6 +1601,7 @@ function renderNotifications() {
     document.querySelectorAll('[data-delete-notification]').forEach((button) => {
         button.addEventListener('click', () => deleteNotification(button.dataset.deleteNotification));
     });
+    bindSoundToggle(document.getElementById('notificationsList'));
 }
 
 function renderAnalytics() {
@@ -1386,10 +1677,27 @@ function renderProfileForm() {
         const user = state.deliveryUsers.find((entry) => (entry.uid || entry.id) === uid);
         return `<div class="chip">${user?.displayName || user?.email || uid}</div>`;
     }).join('') : '<div class="empty-state">No delivery partners assigned yet.</div>';
+    const ownerDisplayName = profile.ownerName || profile.businessName || state.authUser?.email || 'Seller';
+    const assignedChipsWithAvatars = sellerDeliveryUids.length ? sellerDeliveryUids.map((uid) => {
+        const user = state.deliveryUsers.find((entry) => (entry.uid || entry.id) === uid);
+        const userName = user?.displayName || user?.email || uid;
+        return `<div class="chip" style="display: flex; align-items: center; gap: 8px; padding: 4px 12px;">${getAvatarHtml(userName, '24px')} <span>${escapeHtml(userName)}</span></div>`;
+    }).join('') : '<div class="empty-state">No delivery partners assigned yet.</div>';
     form.innerHTML = `
+    <div style="display: flex; gap: 20px; margin-bottom: 20px; align-items: flex-start;">
+      <div style="flex-shrink: 0;">
+        ${getAvatarHtml(ownerDisplayName, '80px')}
+      </div>
+      <div style="flex: 1;">
+        <p class="muted" style="margin: 0 0 8px 0;">Your profile avatar</p>
+        <p style="font-size: 12px; color: var(--muted); margin: 0;">Shown as ${escapeHtml(ownerDisplayName)}'s initials. Add a store image below to replace it.</p>
+      </div>
+    </div>
     <label class="full">Business Name<input name="businessName" value="${profile.businessName || ''}" /></label>
     <label>Owner Name<input name="ownerName" value="${profile.ownerName || ''}" /></label>
     <label>Phone<input name="phone" type="tel" value="${profile.phone || ''}" /></label>
+    <label>WhatsApp Number<input name="whatsappNumber" type="tel" value="${profile.whatsappNumber || profile.phone || ''}" placeholder="e.g. +231770000000" /></label>
+    <label class="full">Store Website or Link<input name="websiteUrl" type="url" value="${escapeHtml(profile.websiteUrl || '')}" placeholder="https://example.com/your-store" /></label>
     <label>Mobile money receiver<input name="mobileMoneyNumber" type="tel" value="${profile.mobileMoneyNumber || ''}" /></label>
     <label>Orange Money Phone Number<input name="orangeMoneyNumber" type="tel" value="${profile.orangeMoneyNumber || ''}" /></label>
     <label>Lonestar Cell Phone Number<input name="lonestarMoneyNumber" type="tel" value="${profile.lonestarMoneyNumber || ''}" /></label>
@@ -1419,6 +1727,7 @@ function renderProfileForm() {
     <label>Opening Time<input name="open" value="${profile.openingHours?.open || ''}" /></label>
     <label>Closing Time<input name="close" value="${profile.openingHours?.close || ''}" /></label>
     <label>Delivery Radius<input name="deliveryRadius" type="number" value="${profile.deliveryRadius || 5}" /></label>
+    <label>Standard Delivery Time (days)<input name="standardDeliveryDays" type="number" min="0.25" step="0.25" value="${profile.standardDeliveryDays ?? ''}" placeholder="Uses marketplace default" /></label>
     <label>Prep Time<input name="estimatedPrepTime" type="number" value="${profile.estimatedPrepTime || 20}" /></label>
     ${getQRCardHTML('sellerQrContainer', 'sellerQrCard')}
   `;
@@ -1459,7 +1768,7 @@ function renderProfileForm() {
           <button class="primary-btn" id="assignDeliveryPartnerButton" type="button">Assign partner</button>
         </div>
         <label>Select delivery person<select id="deliveryPartnerSelect">${deliveryUsersOptions}</select></label>
-        <div class="chip-row">${assignedChips}</div>
+        <div class="chip-row">${assignedChipsWithAvatars}</div>
       </div>
     `);
     const assignButton = document.getElementById('assignDeliveryPartnerButton');
@@ -1472,6 +1781,7 @@ function renderSettingsForm() {
     const form = document.getElementById('settingsForm');
     const settings = state.settings || {};
     form.innerHTML = `
+    ${renderThemePreferenceControl()}
     <label>Opening Time<input name="open" value="${settings.open || ''}" /></label>
     <label>Closing Time<input name="close" value="${settings.close || ''}" /></label>
     <label>Delivery Radius<input name="deliveryRadius" type="number" value="${settings.deliveryRadius || 5}" /></label>
@@ -1482,6 +1792,11 @@ function renderSettingsForm() {
     <label><input type="checkbox" name="acceptOrders" ${settings.acceptOrders !== false ? 'checked' : ''} /> Accept Orders</label>
     <label><input type="checkbox" name="autoAccept" ${settings.autoAccept ? 'checked' : ''} /> Auto Accept</label>
   `;
+        bindThemePreferenceControl(form, {
+                db,
+                userId: state.authUser?.uid,
+                onError: () => createToast('Theme changed on this device, but could not sync to your account.', 'warning')
+        });
 }
 
 function renderChat() {
@@ -1546,7 +1861,7 @@ async function generateDeliveryPayout() {
         updatedAt: new Date()
     };
     await db.collection('deliveryPayouts').add(payoutPayload);
-    await createNotification(selectedDeliveryUid, 'Payout request created', `A payout request for ${formatCurrency(totalDeliveryFees)} is waiting for your confirmation.`, 'payout_due');
+    await createNotification(selectedDeliveryUid, 'Payout request created', `A payout request for ${formatCurrency(totalDeliveryFees)} is waiting for your confirmation.`, 'payout_due', 'delivery_person');
     createToast('Delivery payout request created.', 'success');
 }
 
@@ -1591,7 +1906,7 @@ async function generatePlatformFee() {
         updatedAt: new Date()
     };
     await db.collection('platformFeePayments').add(feePayload);
-    await createNotification(state.authUser?.uid, 'Platform fee due', `A platform fee of ${formatCurrency(feeAmount)} is ready to be paid.`, 'fee_due');
+    await createNotification(state.authUser?.uid, 'Platform fee due', `A platform fee of ${formatCurrency(feeAmount)} is ready to be paid.`, 'fee_due', 'seller');
     createToast('Platform fee payment record created.', 'success');
 }
 
@@ -1614,7 +1929,7 @@ async function markPayoutAsPaid(payoutId) {
     }, { merge: true });
     const deliveryPersonUid = payout.deliveryPersonUid;
     if (deliveryPersonUid) {
-        await createNotification(deliveryPersonUid, 'Payment marked as made', `The seller marked a payout of ${formatCurrency(Number(amountPaid || 0))} as paid.`, 'payout_awaiting_confirmation');
+        await createNotification(deliveryPersonUid, 'Payment marked as made', `The seller marked a payout of ${formatCurrency(Number(amountPaid || 0))} as paid.`, 'payout_awaiting_confirmation', 'delivery_person');
     }
     createToast('Payout marked as paid.', 'success');
 }
@@ -1640,7 +1955,7 @@ async function markFeeAsPaid(feeId) {
     const adminQuery = await db.collection('users').where('role', '==', 'admin').limit(1).get();
     if (!adminQuery.empty) {
         const adminUser = adminQuery.docs[0];
-        await createNotification(adminUser.id, 'Fee payment pending confirmation', `A platform fee payment of ${formatCurrency(Number(amountPaid || 0))} is waiting for confirmation.`, 'fee_awaiting_confirmation');
+        await createNotification(adminUser.id, 'Fee payment pending confirmation', `A platform fee payment of ${formatCurrency(Number(amountPaid || 0))} is waiting for confirmation.`, 'fee_awaiting_confirmation', 'admin');
     }
     createToast('Platform fee marked as paid.', 'success');
 }
@@ -1973,12 +2288,12 @@ function renderDeliveryPartners() {
 }
 
 function showSection(section) {
-    const allowedSection = state.canSell || section === 'profile' || section === 'financials' ? section : 'profile';
+    const allowedSection = state.canSell || section === 'profile' || section === 'financials' || section === 'wallet' ? section : 'profile';
     state.activeSection = allowedSection;
     setActiveNavigation(allowedSection);
     setMobileNavOpen(false);
-    const expectedPanelId = allowedSection === 'delivery-partners' ? 'deliveryPartnersSection' : `${allowedSection}Section`;
-    sectionPanels.forEach((panel) => panel.classList.toggle('active', panel.id === expectedPanelId));
+    const expectedPanelId = allowedSection === 'delivery-partners' ? 'deliveryPartnersSection' : allowedSection === 'international-products' ? 'catalogSection' : `${allowedSection}Section`;
+    document.querySelectorAll('.section-panel').forEach((panel) => panel.classList.toggle('active', panel.id === expectedPanelId));
     if (allowedSection === 'help') {
         renderHelpSession();
     }
@@ -1988,10 +2303,14 @@ function showSection(section) {
     if (allowedSection === 'delivery-partners') {
         renderDeliveryPartners();
     }
+    if (allowedSection === 'international-products') {
+        renderInternationalCatalog();
+    }
     const titleMap = {
         dashboard: ['Dashboard', 'Track store performance and orders in real time.'],
         profile: ['Profile', 'Keep your seller profile accurate and current.'],
         catalog: ['Catalog', 'Browse the admin master catalog and add products.'],
+        'international-products': ['International Products', 'Buy admin-managed products for resale on your store.'],
         menu: ['Store', 'Manage availability, pricing, and presentation.'],
         orders: ['Orders', 'Accept and prepare incoming orders.'],
         reviews: ['Reviews', 'Monitor customer feedback and reply.'],
@@ -2004,6 +2323,7 @@ function showSection(section) {
         help: ['Help Center', 'Find guides and support resources for sellers.'],
         chat: ['Chat', 'Open a future-ready support conversation.'],
         financials: ['Financials', 'Track delivery payouts and weekly platform fees.']
+        ,wallet: ['Wallet', 'Manage your balance, deposits, and withdrawals.']
     };
     const [title, subtitle] = titleMap[allowedSection] || titleMap.dashboard;
     pageTitle.textContent = title;
@@ -2023,13 +2343,13 @@ async function handleDeliveryRequestAction(action, requestId) {
                 requestRef.update({ status: 'approved', updatedAt: new Date() }),
                 db.collection('users').doc(deliveryPersonUid).set({ approvedSellers: nextApprovedSellers, updatedAt: new Date() }, { merge: true }),
                 db.collection('sellers').doc(state.sellerId).set({ deliveryPersons: Array.from(new Set([...(state.sellerProfile?.deliveryPersons || []), deliveryPersonUid])), updatedAt: new Date() }, { merge: true }),
-                db.collection('notifications').add({ recipientUid: deliveryPersonUid, title: 'Seller approved', message: `Your request to join ${state.sellerProfile?.name || 'the seller'} was approved.`, type: 'delivery', read: false, isDeleted: false, createdAt: new Date() })
+                createRoleNotification(db, deliveryPersonUid, 'delivery_person', { title: 'Seller approved', message: `Your request to join ${state.sellerProfile?.name || 'the seller'} was approved.`, type: 'delivery' })
             ]);
             createToast('Delivery request approved.', 'success');
         } else if (action === 'reject') {
             await Promise.all([
                 requestRef.update({ status: 'rejected', updatedAt: new Date() }),
-                db.collection('notifications').add({ recipientUid: request.deliveryPersonUid, title: 'Seller request declined', message: `Your request to join ${state.sellerProfile?.name || 'the seller'} was declined.`, type: 'delivery', read: false, isDeleted: false, createdAt: new Date() })
+                createRoleNotification(db, request.deliveryPersonUid, 'delivery_person', { title: 'Seller request declined', message: `Your request to join ${state.sellerProfile?.name || 'the seller'} was declined.`, type: 'delivery' })
             ]);
             createToast('Delivery request declined.', 'success');
         }
@@ -2195,12 +2515,15 @@ async function saveProfile(event) {
     const form = document.getElementById('profileForm');
     const data = Object.fromEntries(new FormData(form));
     const phone = String(data.phone || '').trim();
+    const whatsappNumber = String(data.whatsappNumber || '').trim();
     const city = String(data.city || '').trim();
     const county = String(data.county || '').trim();
     const category = String(data.category || '').trim();
     const mobileMoneyNumber = String(data.mobileMoneyNumber || '').trim();
     const orangeMoneyNumber = String(data.orangeMoneyNumber || '').trim();
     const lonestarMoneyNumber = String(data.lonestarMoneyNumber || '').trim();
+    const websiteUrl = String(data.websiteUrl || '').trim();
+    const standardDeliveryDays = String(data.standardDeliveryDays || '').trim();
     const facebookUrl = String(data.facebookUrl || '').trim();
     const instagramUrl = String(data.instagramUrl || '').trim();
     const youtubeUrl = String(data.youtubeUrl || '').trim();
@@ -2210,10 +2533,27 @@ async function saveProfile(event) {
         return;
     }
 
+    if (websiteUrl) {
+        try {
+            const parsedWebsiteUrl = new URL(websiteUrl);
+            if (!['http:', 'https:'].includes(parsedWebsiteUrl.protocol)) throw new Error('Unsupported protocol');
+        } catch (error) {
+            createToast('Enter a valid http or https store link.', 'warning');
+            return;
+        }
+    }
+
+    if (standardDeliveryDays && (!Number.isFinite(Number(standardDeliveryDays)) || Number(standardDeliveryDays) <= 0)) {
+        createToast('Standard delivery time must be greater than zero days.', 'warning');
+        return;
+    }
+
     const profilePayload = {
         businessName: data.businessName,
         ownerName: data.ownerName,
         phone,
+        whatsappNumber: whatsappNumber || phone,
+        websiteUrl,
         mobileMoneyNumber: mobileMoneyNumber || orangeMoneyNumber || '',
         orangeMoneyNumber,
         lonestarMoneyNumber,
@@ -2235,6 +2575,7 @@ async function saveProfile(event) {
         description: data.description,
         openingHours: { open: data.open, close: data.close },
         deliveryRadius: Number(data.deliveryRadius || 0),
+        standardDeliveryDays: standardDeliveryDays ? Number(standardDeliveryDays) : null,
         estimatedPrepTime: Number(data.estimatedPrepTime || 0),
         updatedAt: new Date()
     };
@@ -2242,6 +2583,7 @@ async function saveProfile(event) {
     await updateUserProfile(state.authUser?.uid, {
         displayName: data.ownerName || data.businessName || state.userProfile?.displayName || '',
         phone,
+        whatsappNumber: whatsappNumber || phone,
         email: data.email || '',
         address: data.address || '',
         city,
@@ -2281,6 +2623,8 @@ async function saveSettings(event) {
 async function addToMenu(productId) {
     const masterProduct = state.masterProducts.find((product) => product.id === productId);
     if (!masterProduct) return;
+    const masterBasePrice = Number(masterProduct.defaultPrice ?? masterProduct.standardPrice ?? masterProduct.price ?? 0);
+    const pricing = getCatalogPriceBreakdown(masterBasePrice, masterProduct.sellerMarkup || 0, state.adminCatalogPriceRule, masterProduct.category);
     const existing = await db.collection('sellers').doc(state.sellerId).collection('menu').where('masterProductId', '==', productId).limit(1).get();
     if (!existing.empty) {
         createToast('This product is already in your store.', 'error');
@@ -2291,15 +2635,31 @@ async function addToMenu(productId) {
         sellerId: state.sellerId,
         name: masterProduct.name,
         category: getCategoryDisplayName(masterProduct.category || 'General'),
-        price: 0,
+        price: pricing.totalPrice,
         currency: 'LRD',
+        isSellerOwned: false,
+        defaultPrice: masterBasePrice,
+        sellerMarkup: pricing.sellerMarkup,
+        totalPrice: pricing.totalPrice,
+        rating: Number(masterProduct.rating || 0),
+        reviewCount: Number(masterProduct.reviewCount || 0),
+        orderFlow: 'catalog',
         sellerDescription: masterProduct.description || '',
+        storageOptions: Array.isArray(masterProduct.storageOptions) ? masterProduct.storageOptions : [],
+        colorOptions: Array.isArray(masterProduct.colorOptions) ? masterProduct.colorOptions : [],
+        shoeVariants: Array.isArray(masterProduct.shoeVariants) ? masterProduct.shoeVariants : [],
+        ...(Array.isArray(masterProduct.variantOptions) ? {
+            variantOptions: masterProduct.variantOptions.map((variant) => ({
+                ...variant,
+                priceModifier: convertCurrency(Number(variant.priceModifier || 0), masterProduct.standardCurrency || masterProduct.currency || 'USD', 'LRD')
+            }))
+        } : {}),
         availability: true,
         featured: false,
         recommended: false,
         todayDeal: false,
         discount: 0,
-        preparationTime: masterProduct.preparationTime || 20,
+        preparationTime: masterProduct.preparationTime || 24,
         servingSize: 'Standard',
         sellerTags: [],
         stockStatus: 'in_stock',
@@ -2341,24 +2701,139 @@ async function bulkDeleteMenu() {
     createToast('Selected items removed.', 'success');
 }
 
+async function deleteMenuItem(menuId) {
+    const item = state.menuItems.find((entry) => entry.id === menuId);
+    if (!item) return;
+    if (!confirmDialog(`Remove "${escapeHtml(item.name || 'this product')}" from your store? You can add it back from the catalog anytime.`)) return;
+    try {
+        await db.collection('sellers').doc(state.sellerId).collection('menu').doc(menuId).delete();
+        const index = state.menuItems.findIndex((entry) => entry.id === menuId);
+        if (index >= 0) state.menuItems.splice(index, 1);
+        renderMenu();
+        createToast(`${item.name || 'Product'} removed from your store.`, 'success');
+    } catch (error) {
+        console.error(error);
+        createToast('Failed to remove product from store.', 'error');
+    }
+}
+
 async function openMenuEditor(menuId) {
     const item = state.menuItems.find((entry) => entry.id === menuId);
     if (!item) return;
+    let variantOptionsDraft = Array.isArray(item.variantOptions) ? item.variantOptions.map((variant) => ({
+        values: { ...(variant.values || {}) },
+        priceModifier: Number(variant.priceModifier || 0),
+        stockCount: Math.max(0, Number(variant.stockCount || 0))
+    })) : [];
+    let variantCategory = item.category || '';
+    const storageVariants = Array.isArray(item.storageOptions) ? item.storageOptions.map((variant) => typeof variant === 'string'
+        ? `${variant}|0|1`
+        : `${variant.label}|${Number(variant.priceModifier || 0)}|${Math.max(0, Number(variant.stockCount || 0))}`).join('\n') : '';
+    const shoeVariants = Array.isArray(item.shoeVariants) ? item.shoeVariants.map((variant) => `${variant.color} / ${variant.size}|${Number(variant.priceModifier || 0)}|${Math.max(0, Number(variant.stockCount || 0))}`).join('\n') : '';
     modalTitle.textContent = 'Edit Store Item';
+    const isCatalogItem = item.isSellerOwned !== true && item.orderFlow !== 'seller_owned';
+    const storedMinPriceLRD = Number(item.defaultPrice ?? item.price ?? 0);
+    const minPriceLRD = isCatalogItem
+        ? getCatalogPriceBreakdown(storedMinPriceLRD, item.sellerMarkup || 0, state.adminCatalogPriceRule, item.category).basePrice
+        : storedMinPriceLRD;
+    const currentCurrency = isCatalogItem ? 'LRD' : normalizeCurrency(item.currency) || 'LRD';
+    const currentPriceInLRD = isCatalogItem
+        ? minPriceLRD + Number(item.sellerMarkup || 0)
+        : convertCurrency(Number(item.price ?? minPriceLRD), currentCurrency, 'LRD');
+    const currentProfitInLRD = isCatalogItem
+        ? Number(item.sellerMarkup || 0)
+        : Math.max(0, currentPriceInLRD - minPriceLRD);
+    const currentPriceInOriginalCurrency = currentCurrency === 'USD'
+        ? convertCurrency(currentPriceInLRD, 'LRD', 'USD')
+        : currentPriceInLRD;
+    const categoryOptions = getCategoryOptions();
+    const currentCategory = getCategoryDisplayName(item.category || 'General');
+    const hasCurrentCategory = categoryOptions.some((category) => category.name === currentCategory);
+    const managedVariantOptionsMarkup = isCatalogItem && variantOptionsDraft.length
+        ? `<div class="variant-editor full"><strong>Product variants <span class="muted">(managed by admin)</span></strong>${variantOptionsDraft.map((variant) => {
+            const values = getCategoryVariantConfig(item.category).fields.map((variantField) => `${variantField.label}: ${variant.values?.[variantField.key] || ''}`).filter((value) => !value.endsWith(': '));
+            return values.length ? `<div class="muted">${values.map((value) => escapeHtml(value)).join(' • ')} • ${formatCurrency(variant.priceModifier || 0, 'LRD')} price modifier • Stock ${Math.max(0, Number(variant.stockCount || 0))}</div>` : '';
+        }).join('')}</div>`
+        : '';
+    const renderVariantEditor = () => {
+        const editor = document.getElementById('sellerVariantEditor');
+        if (!editor) return;
+        const sellerOwned = Boolean(document.querySelector('#menuEditorForm input[name="isSellerOwned"]')?.checked);
+        const category = document.querySelector('#menuEditorForm input[name="category"]')?.value || '';
+        const config = getCategoryVariantConfig(category);
+        if (!sellerOwned || !config.fields.length) {
+            editor.innerHTML = '';
+            editor.classList.add('hidden');
+            return;
+        }
+        editor.classList.remove('hidden');
+        const isEnabled = variantOptionsDraft.length > 0;
+        const optionsMarkup = config.fields.map((variantField) => {
+            const selectedValues = new Set(variantOptionsDraft.map((variant) => String(variant.values?.[variantField.key] || '')));
+            return `<div class="variant-editor full"><strong>${escapeHtml(variantField.label)}</strong><div class="variant-check-grid">${variantField.allowedOptions.map((option) => {
+                const value = typeof option === 'string' ? option : option.value;
+                const label = typeof option === 'string' ? option : option.label;
+                const swatch = typeof option === 'string' ? '' : option.hex;
+                return `<label>${variantField.inputType === 'color' && swatch ? `<span class="color-swatch" style="--swatch:${escapeHtml(swatch)}"></span>` : ''}<input type="checkbox" data-variant-field="${escapeHtml(variantField.key)}" value="${escapeHtml(value)}" ${selectedValues.has(value) ? 'checked' : ''} /> ${escapeHtml(label)}</label>`;
+            }).join('')}</div></div>`;
+        }).join('');
+        editor.innerHTML = `<label class="full"><input type="checkbox" name="enableVariants" ${isEnabled ? 'checked' : ''} /> Configure product variants</label><div id="sellerVariantFields" class="full ${isEnabled ? '' : 'hidden'}">${optionsMarkup}<div id="sellerVariantRows" class="storage-variant-grid"></div></div>`;
+        const fieldsContainer = document.getElementById('sellerVariantFields');
+        const renderRows = () => {
+            const rowsContainer = document.getElementById('sellerVariantRows');
+            if (!rowsContainer) return;
+            const selectedOptions = config.fields.map((variantField) => Array.from(editor.querySelectorAll(`[data-variant-field="${variantField.key}"]:checked`)).map((input) => input.value));
+            if (selectedOptions.some((values) => !values.length)) {
+                rowsContainer.innerHTML = '<p class="muted">Select at least one value for each field to configure stock and price.</p>';
+                return;
+            }
+            const combinations = selectedOptions.reduce((rows, values, fieldIndex) => rows.flatMap((row) => values.map((value) => ({ ...row, [config.fields[fieldIndex].key]: value }))), [{}]);
+            rowsContainer.innerHTML = combinations.map((values) => {
+                const existing = variantOptionsDraft.find((variant) => config.fields.every((variantField) => String(variant.values?.[variantField.key] || '') === values[variantField.key])) || {};
+                const label = config.fields.map((variantField) => `${variantField.label}: ${values[variantField.key]}`).join(' / ');
+                return `<div class="storage-variant-row" data-variant-row data-variant-values="${escapeHtml(JSON.stringify(values))}"><label>${escapeHtml(label)}</label><input type="number" min="0" step="0.01" data-variant-price value="${Number(existing.priceModifier || 0)}" placeholder="Price +" aria-label="Price modifier for ${escapeHtml(label)}" /><input type="number" min="0" step="1" data-variant-stock value="${Math.max(0, Number(existing.stockCount || 0))}" placeholder="Stock" aria-label="Stock for ${escapeHtml(label)}" /></div>`;
+            }).join('');
+        };
+        editor.querySelector('input[name="enableVariants"]')?.addEventListener('change', (event) => {
+            fieldsContainer?.classList.toggle('hidden', !event.target.checked);
+            if (!event.target.checked) variantOptionsDraft = [];
+            else renderRows();
+        });
+        editor.querySelectorAll('[data-variant-field]').forEach((input) => input.addEventListener('change', renderRows));
+        if (isEnabled) renderRows();
+    };
+    
     modalBody.innerHTML = `
     <form id="menuEditorForm" class="form-grid">
-    <label>Price<input name="price" type="number" min="0" step="0.01" value="${item.price || 0}" /></label>
-    <label>Currency<select name="currency"><option value="LRD" ${normalizeCurrency(item.currency) === 'LRD' ? 'selected' : ''}>LRD</option><option value="USD" ${normalizeCurrency(item.currency) === 'USD' ? 'selected' : ''}>USD</option></select></label>
-      <label>Preparation Time<input name="preparationTime" type="number" value="${item.preparationTime || 20}" /></label>
-      <label>Serving Size<input name="servingSize" value="${item.servingSize || ''}" /></label>
-      <label>Stock Status<select name="stockStatus"><option ${item.stockStatus === 'in_stock' ? 'selected' : ''}>in_stock</option><option ${item.stockStatus === 'low_stock' ? 'selected' : ''}>low_stock</option><option ${item.stockStatus === 'out_of_stock' ? 'selected' : ''}>out_of_stock</option></select></label>
-      <label>Seller Description<textarea name="sellerDescription">${item.sellerDescription || ''}</textarea></label>
-    <label class="full">Seller Notes<textarea name="notes">${item.notes || ''}</textarea></label>
+    <label>Product Name<input name="name" type="text" value="${escapeHtml(item.name || '')}" required /></label>
+    <label>Category<select name="category"><option value="General" ${currentCategory === 'General' ? 'selected' : ''}>General</option>${categoryOptions.map((category) => `<option value="${escapeHtml(category.name)}" ${category.name === currentCategory ? 'selected' : ''}>${escapeHtml(category.name)}</option>`).join('')}${!hasCurrentCategory && currentCategory !== 'General' ? `<option value="${escapeHtml(item.category)}" selected>${escapeHtml(item.category)}</option>` : ''}</select></label>
+    <label class="full">Product facts for AI draft<textarea id="listingDraftBrief" maxlength="1200" placeholder="Describe the product's real features, materials, size, and intended use."></textarea></label>
+    <div class="row-actions full"><button class="secondary-btn" id="generateListingDraft" type="button">Draft Listing with AI</button><span class="muted" id="listingDraftStatus">Drafts are suggestions. Review before using.</span></div>
+    <div class="panel-card full hidden" id="listingDraftPreview"></div>
+    ${storageVariants ? `<label>Storage variants <span class="muted">(managed by admin)</span><textarea name="storageOptions" readonly>${escapeHtml(storageVariants)}</textarea></label>` : ''}
+    ${shoeVariants ? `<label>Shoe size/color variants <span class="muted">(managed by admin)</span><textarea name="shoeVariants" readonly>${escapeHtml(shoeVariants)}</textarea></label>` : ''}
+    ${managedVariantOptionsMarkup}
+    <div id="sellerVariantEditor" class="full"></div>
+    <div class="muted">Minimum allowed price (set by admin): ${formatCurrency(minPriceLRD, 'LRD')}</div>
+    <label>Currency<select name="currency" id="priceCurrentencySelect"><option value="LRD" ${currentCurrency === 'LRD' ? 'selected' : ''}>LRD</option><option value="USD" ${currentCurrency === 'USD' ? 'selected' : ''}>USD</option></select></label>
+    <label>Admin Default Price<input type="text" value="${formatCurrency(minPriceLRD, 'LRD')}" readonly /></label>
+    <label>Seller Profit<input name="sellerProfit" type="number" min="0" step="0.01" id="sellerProfitInput" value="${currentCurrency === 'USD' ? convertCurrency(currentProfitInLRD, 'LRD', 'USD') : currentProfitInLRD}" required /></label>
+    <label>Selling Price<input name="price" type="number" id="sellingPriceInput" value="${currentPriceInOriginalCurrency}" readonly /></label>
+    <div class="muted" id="menuPriceInfo">Admin price + seller profit: ${formatCurrency(currentPriceInLRD, 'LRD')}</div>
+    <div class="muted" id="menuPriceWarning"></div>
+    <label><input name="isSellerOwned" type="checkbox" ${item.isSellerOwned ? 'checked' : ''} /> I physically own this product</label>
+    <label>Preparation Time (hours)<input name="preparationTime" type="number" min="0.25" step="0.25" value="${item.preparationTime || 24}" /></label>
+    <label>Delivery Time for This Product (days)<input name="deliveryDays" type="number" min="0.25" step="0.25" value="${item.deliveryDays ?? ''}" placeholder="Use store standard" /></label>
+    <label>Serving Size<input name="servingSize" value="${escapeHtml(item.servingSize || '')}" /></label>
+    <label>Stock Status<select name="stockStatus"><option ${item.stockStatus === 'in_stock' ? 'selected' : ''}>in_stock</option><option ${item.stockStatus === 'low_stock' ? 'selected' : ''}>low_stock</option><option ${item.stockStatus === 'out_of_stock' ? 'selected' : ''}>out_of_stock</option></select></label>
+    <label class="full">Seller Description<textarea name="sellerDescription">${escapeHtml(item.sellerDescription || '')}</textarea></label>
+    <label class="full">Search keywords<input name="sellerTags" value="${escapeHtml((Array.isArray(item.sellerTags) ? item.sellerTags : []).join(', '))}" placeholder="Search terms separated by commas" /></label>
+    <label class="full">Seller Notes<textarea name="notes">${escapeHtml(item.notes || '')}</textarea></label>
     <label class="full">Product Video Link<input name="videoUrl" type="url" value="${escapeHtml(item.videoUrl || item.videoLink || '')}" placeholder="https://example.com/product-video" /></label>
-      <label><input type="checkbox" name="availability" ${item.availability ? 'checked' : ''} /> Available</label>
-      <label><input type="checkbox" name="featured" ${item.featured ? 'checked' : ''} /> Featured</label>
-      <label><input type="checkbox" name="recommended" ${item.recommended ? 'checked' : ''} /> Recommended</label>
-      <label><input type="checkbox" name="todayDeal" ${item.todayDeal ? 'checked' : ''} /> Today's Deal</label>
+    <label><input type="checkbox" name="availability" ${item.availability ? 'checked' : ''} /> Available</label>
+    <label><input type="checkbox" name="featured" ${item.featured ? 'checked' : ''} /> Featured</label>
+    <label><input type="checkbox" name="recommended" ${item.recommended ? 'checked' : ''} /> Recommended</label>
+    <label><input type="checkbox" name="todayDeal" ${item.todayDeal ? 'checked' : ''} /> Today's Deal</label>
     </form>`;
     modalActions.innerHTML = `
     <button class="ghost-btn" id="cancelEditor">Cancel</button>
@@ -2366,11 +2841,158 @@ async function openMenuEditor(menuId) {
     <button class="primary-btn" id="saveEditor">Save</button>`;
     modalBackdrop.classList.remove('hidden');
     document.getElementById('shareEditorLink')?.addEventListener('click', () => shareMenuItem(menuId));
+    renderVariantEditor();
+    let pendingListingDraft = null;
+    const listingDraftForm = document.getElementById('menuEditorForm');
+    const listingDraftPreview = document.getElementById('listingDraftPreview');
+    const listingDraftStatus = document.getElementById('listingDraftStatus');
+    const generateListingDraftButton = document.getElementById('generateListingDraft');
+    generateListingDraftButton?.addEventListener('click', async () => {
+        const productBrief = String(document.getElementById('listingDraftBrief')?.value || '').trim();
+        if (!productBrief) {
+            createToast('Describe the product facts before requesting a draft.', 'warning');
+            return;
+        }
+        generateListingDraftButton.disabled = true;
+        generateListingDraftButton.textContent = 'Drafting...';
+        if (listingDraftStatus) listingDraftStatus.textContent = 'Learning from the master catalog and preparing a local draft...';
+        try {
+            pendingListingDraft = generateLocalListingDraft({
+                productBrief,
+                productName: String(listingDraftForm.elements.name.value || '').trim(),
+                currentDescription: String(listingDraftForm.elements.sellerDescription.value || '').trim(),
+                currentCategory: String(listingDraftForm.elements.category.value || '').trim(),
+                catalogProducts: state.masterProducts
+            });
+            if (!pendingListingDraft?.title || !pendingListingDraft?.description) {
+                throw new Error('The local assistant could not create a draft from those facts. Add a little more product detail and try again.');
+            }
+            listingDraftPreview.innerHTML = `
+                <strong>Review local draft</strong>
+                <p><b>Title:</b> ${escapeHtml(pendingListingDraft.title)}</p>
+                <p><b>Description:</b> ${escapeHtml(pendingListingDraft.description)}</p>
+                <p><b>Category suggestion:</b> ${escapeHtml(pendingListingDraft.suggestedCategory || 'No confident match; choose the category yourself.')}</p>
+                <p><b>Search keywords:</b> ${escapeHtml((pendingListingDraft.keywords || []).join(', ') || 'None suggested')}</p>
+                <p class="muted">Category classifier trained on ${pendingListingDraft.trainingExamples} active catalog products plus category definitions. Drafting runs on this device.</p>
+                <div class="row-actions"><button class="primary-btn" id="useListingDraft" type="button">Use Text Draft</button>${pendingListingDraft.suggestedCategory ? '<button class="secondary-btn" id="useListingCategory" type="button">Use Suggested Category</button>' : ''}<button class="ghost-btn" id="discardListingDraft" type="button">Discard</button></div>
+            `;
+            listingDraftPreview.classList.remove('hidden');
+            listingDraftPreview.querySelector('#useListingDraft')?.addEventListener('click', () => {
+                listingDraftForm.elements.name.value = pendingListingDraft.title;
+                listingDraftForm.elements.sellerDescription.value = pendingListingDraft.description;
+                listingDraftForm.elements.sellerTags.value = (pendingListingDraft.keywords || []).join(', ');
+                if (listingDraftStatus) listingDraftStatus.textContent = 'Text draft applied. Review it, then Save to update your listing.';
+                pendingListingDraft = null;
+                listingDraftPreview.classList.add('hidden');
+            });
+            listingDraftPreview.querySelector('#useListingCategory')?.addEventListener('click', () => {
+                listingDraftForm.elements.category.value = pendingListingDraft.suggestedCategory;
+                listingDraftForm.elements.category.dispatchEvent(new Event('change', { bubbles: true }));
+                listingDraftForm.elements.name.value = pendingListingDraft.title;
+                listingDraftForm.elements.sellerDescription.value = pendingListingDraft.description;
+                listingDraftForm.elements.sellerTags.value = (pendingListingDraft.keywords || []).join(', ');
+                if (listingDraftStatus) listingDraftStatus.textContent = 'Text and category applied. Review everything, then Save to update your listing.';
+                pendingListingDraft = null;
+                listingDraftPreview.classList.add('hidden');
+            });
+            listingDraftPreview.querySelector('#discardListingDraft')?.addEventListener('click', () => {
+                pendingListingDraft = null;
+                listingDraftPreview.classList.add('hidden');
+                if (listingDraftStatus) listingDraftStatus.textContent = 'Draft discarded. Your listing was not changed.';
+            });
+            if (listingDraftStatus) listingDraftStatus.textContent = 'Draft ready. Nothing is saved until you choose Save.';
+        } catch (error) {
+            console.error('[Manna Marketplace] Local seller listing draft failed:', error);
+            if (listingDraftStatus) listingDraftStatus.textContent = error.message || 'Unable to generate a draft right now.';
+            createToast(error.message || 'Unable to generate a draft right now.', 'error');
+        } finally {
+            generateListingDraftButton.disabled = false;
+            generateListingDraftButton.textContent = 'Draft Listing Locally';
+        }
+    });
+    generateListingDraftButton.textContent = 'Draft Listing Locally';
+    const categoryInput = document.querySelector('#menuEditorForm select[name="category"]');
+    categoryInput?.addEventListener('change', () => {
+        const nextCategory = categoryInput.value.trim();
+        const hasConfiguredVariants = variantOptionsDraft.length || document.querySelector('#sellerVariantEditor input[name="enableVariants"]')?.checked;
+        if (nextCategory !== variantCategory && hasConfiguredVariants && !confirmDialog('Changing category will clear the configured variant values for this product. Continue?')) {
+            categoryInput.value = variantCategory;
+            return;
+        }
+        if (nextCategory !== variantCategory) variantOptionsDraft = [];
+        variantCategory = nextCategory;
+        renderVariantEditor();
+    });
+    document.querySelector('#menuEditorForm input[name="isSellerOwned"]')?.addEventListener('change', renderVariantEditor);
+    
+    const priceInput = document.querySelector('#menuEditorForm input[name="price"]');
+    const profitInput = document.querySelector('#menuEditorForm input[name="sellerProfit"]');
+    const currencySelect = document.querySelector('#priceCurrentencySelect');
+    const priceInfo = document.getElementById('menuPriceInfo');
+    const priceWarning = document.getElementById('menuPriceWarning');
+    let priceInLRD = currentPriceInLRD;
+    
+    const updatePriceDisplay = () => {
+        const price = Number(priceInput?.value || 0);
+        const currency = currencySelect?.value || 'LRD';
+        
+        // Update the info display
+        if (priceInfo) {
+            priceInfo.textContent = currency === 'USD'
+                ? `${formatCurrency(price, 'USD')} = ${formatCurrency(priceInLRD, 'LRD')} (converted)`
+                : `Current price: ${formatCurrency(price, 'LRD')}`;
+        }
+        
+        // Validate minimum price
+        if (priceInLRD < minPriceLRD) {
+            priceWarning.textContent = `⚠️ Price cannot be below the admin minimum of ${formatCurrency(minPriceLRD, 'LRD')}`;
+            priceWarning.style.color = '#e74c3c';
+        } else {
+            priceWarning.textContent = `✓ Price is valid (at or above minimum)`;
+            priceWarning.style.color = '#27ae60';
+        }
+    };
+    
+    const handleCurrencyChange = () => {
+        const newCurrency = currencySelect?.value;
+        const newPrice = convertCurrency(priceInLRD, 'LRD', newCurrency);
+        const newProfit = convertCurrency(currentProfitInLRD, 'LRD', newCurrency);
+        priceInput.value = Math.round(newPrice * 100) / 100;
+        profitInput.value = Math.round(newProfit * 100) / 100;
+        updatePriceDisplay();
+    };
+    
+    profitInput?.addEventListener('input', () => {
+        const profitInLRD = convertCurrency(profitInput.value, currencySelect.value, 'LRD');
+        priceInLRD = minPriceLRD + profitInLRD;
+        priceInput.value = Math.round(convertCurrency(priceInLRD, 'LRD', currencySelect.value) * 100) / 100;
+        updatePriceDisplay();
+    });
+    priceInput?.addEventListener('blur', updatePriceDisplay);
+    currencySelect?.addEventListener('change', handleCurrencyChange);
+    
+    // Initial display update
+    updatePriceDisplay();
+    
     const saveButton = document.getElementById('saveEditor');
     saveButton?.addEventListener('click', async () => {
         const form = document.getElementById('menuEditorForm');
         const formData = new FormData(form);
         const videoUrl = String(formData.get('videoUrl') || '').trim();
+        const sellingPrice = Number(formData.get('price') || 0);
+        const selectedCurrency = formData.get('currency') || 'LRD';
+        const sellerProfit = Math.max(0, priceInLRD - minPriceLRD);
+        const deliveryDaysValue = String(formData.get('deliveryDays') || '').trim();
+        const category = String(formData.get('category') || '').trim() || item.category;
+        const variantConfig = getCategoryVariantConfig(category);
+        const configureVariants = Boolean(formData.get('enableVariants'));
+        
+        // Validate price is not below minimum
+        if (priceInLRD < minPriceLRD) {
+            createToast(`Price cannot be below the minimum of ${formatCurrency(minPriceLRD, 'LRD')}`, 'error');
+            return;
+        }
+        
         if (videoUrl) {
             try {
                 const parsedVideoUrl = new URL(videoUrl);
@@ -2380,14 +3002,54 @@ async function openMenuEditor(menuId) {
                 return;
             }
         }
+
+        if (deliveryDaysValue && (!Number.isFinite(Number(deliveryDaysValue)) || Number(deliveryDaysValue) <= 0)) {
+            createToast('Product delivery time must be greater than zero days.', 'warning');
+            return;
+        }
+
+        if (configureVariants) {
+            const selectedFields = variantConfig.fields.map((variantField) => ({
+                field: variantField,
+                values: Array.from(document.querySelectorAll(`#sellerVariantEditor [data-variant-field="${variantField.key}"]:checked`)).map((input) => input.value)
+            }));
+            if (!selectedFields.length || selectedFields.some(({ values }) => !values.length)) {
+                createToast('Select at least one value for each configured variant field.', 'warning');
+                return;
+            }
+            variantOptionsDraft = Array.from(document.querySelectorAll('#sellerVariantEditor [data-variant-row]')).map((row) => ({
+                values: JSON.parse(row.dataset.variantValues || '{}'),
+                priceModifier: Number(row.querySelector('[data-variant-price]')?.value || 0),
+                stockCount: Math.max(0, Number(row.querySelector('[data-variant-stock]')?.value || 0))
+            }));
+        } else if (formData.get('enableVariants')) {
+            createToast('Configure at least one variant combination before saving.', 'warning');
+            return;
+        }
+
         const payload = {
-            price: Number(formData.get('price') || 0),
-            currency: normalizeCurrency(formData.get('currency')),
-            preparationTime: Number(formData.get('preparationTime') || 0),
-            servingSize: formData.get('servingSize'),
+            name: String(formData.get('name') || '').trim() || item.name,
+            category,
+            storageOptions: Array.isArray(item.storageOptions) ? item.storageOptions : [],
+            colorOptions: Array.isArray(item.colorOptions) ? item.colorOptions : [],
+            shoeVariants: Array.isArray(item.shoeVariants) ? item.shoeVariants : [],
+            variantOptions: variantOptionsDraft,
+            price: sellingPrice,
+            totalPrice: sellingPrice,
+            currency: normalizeCurrency(selectedCurrency),
+            priceInLRD,
+            priceInUSD: convertCurrency(priceInLRD, 'LRD', 'USD'),
+            defaultPrice: isCatalogItem ? storedMinPriceLRD : minPriceLRD,
+            sellerMarkup: Math.max(0, priceInLRD - minPriceLRD),
+            isSellerOwned: Boolean(formData.get('isSellerOwned')),
+            orderFlow: formData.get('isSellerOwned') ? 'seller_owned' : 'catalog',
+            preparationTime: Number(formData.get('preparationTime') || 24),
+            deliveryDays: deliveryDaysValue ? Number(deliveryDaysValue) : null,
+            servingSize: String(formData.get('servingSize') || '').trim(),
             stockStatus: formData.get('stockStatus'),
-            sellerDescription: formData.get('sellerDescription'),
-            notes: formData.get('notes'),
+            sellerDescription: String(formData.get('sellerDescription') || '').trim(),
+            sellerTags: String(formData.get('sellerTags') || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 20),
+            notes: String(formData.get('notes') || '').trim(),
             videoUrl,
             availability: Boolean(formData.get('availability')),
             featured: Boolean(formData.get('featured')),
@@ -2482,22 +3144,55 @@ function openSupportModal() {
 }
 
 function openPromotionModal() {
+        const eligibleProducts = state.menuItems.filter((item) => item.masterProductId && item.isSellerOwned !== true && Number(item.defaultPrice || 0) > 0 && Number(item.sellerMarkup || 0) > 0);
     modalTitle.textContent = 'Create Promotion';
     modalBody.innerHTML = `
     <form id="promotionForm" class="form-grid">
       <label class="full">Title<input name="title" /></label>
       <label class="full">Description<textarea name="description"></textarea></label>
-      <label>Type<select name="type"><option value="discount">Discount</option><option value="featured">Featured</option><option value="deal">Deal</option></select></label>
-      <label>Discount<input name="value" type="number" /></label>
-      <label class="full">Valid Until<input name="validUntil" type="date" /></label>
+            <label>Discount from seller profit (%)<input name="discountPercent" type="number" min="1" max="100" step="1" required /></label>
+            <label>Applies to<select name="scope" id="promotionScope"><option value="all">All eligible products</option><option value="selected">Selected products</option></select></label>
+            <div id="promotionProductSelection" class="full hidden">
+                <strong>Select products</strong>
+                ${eligibleProducts.length ? eligibleProducts.map((item) => `<label><input type="checkbox" name="productIds" value="${escapeHtml(item.id)}" /> ${escapeHtml(item.name || 'Product')}</label>`).join('') : '<div class="muted">No eligible master-catalog products with seller profit are available.</div>'}
+            </div>
+            <label>Starts<input name="validFrom" type="date" /></label>
+            <label>Ends<input name="validUntil" type="date" /></label>
+            <label>Status<select name="status"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
     </form>`;
     modalActions.innerHTML = `
     <button class="ghost-btn" id="cancelPromotion">Cancel</button>
     <button class="primary-btn" id="savePromotion">Save</button>`;
     modalBackdrop.classList.remove('hidden');
+    document.getElementById('promotionScope').addEventListener('change', (event) => {
+        document.getElementById('promotionProductSelection').classList.toggle('hidden', event.target.value !== 'selected');
+    });
     document.getElementById('savePromotion').addEventListener('click', async () => {
-        const formData = Object.fromEntries(new FormData(document.getElementById('promotionForm')));
-        await db.collection('sellers').doc(state.sellerId).collection('promotions').add({ ...formData, createdAt: new Date(), updatedAt: new Date() });
+        const form = document.getElementById('promotionForm');
+        const promotionFormData = new FormData(form);
+        const formData = Object.fromEntries(promotionFormData);
+        const discountPercent = Number(formData.discountPercent);
+        const productIds = promotionFormData.getAll('productIds').map(String);
+        if (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100) {
+            createToast('Enter a discount between 1% and 100% of seller profit.', 'warning');
+            return;
+        }
+        if (formData.scope === 'selected' && !productIds.length) {
+            createToast('Select at least one product for this promotion.', 'warning');
+            return;
+        }
+        if (formData.validFrom && formData.validUntil && formData.validFrom > formData.validUntil) {
+            createToast('The promotion end date must be on or after its start date.', 'warning');
+            return;
+        }
+        await db.collection('sellers').doc(state.sellerId).collection('promotions').add({
+            ...formData,
+            type: 'discount',
+            discountPercent,
+            productIds: formData.scope === 'selected' ? productIds : [],
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
         closeModal();
         await loadPromotions();
         renderPromotions();
@@ -2507,23 +3202,65 @@ function openPromotionModal() {
 }
 
 function openCouponModal() {
+        const eligibleProducts = state.menuItems.filter((item) => item.masterProductId && item.isSellerOwned !== true && Number(item.defaultPrice || 0) > 0 && Number(item.sellerMarkup || 0) > 0);
     modalTitle.textContent = 'Create Coupon';
     modalBody.innerHTML = `
     <form id="couponForm" class="form-grid">
-      <label class="full">Code<input name="code" /></label>
-      <label>Type<select name="type"><option value="percentage">Percentage</option><option value="fixed">Fixed</option></select></label>
-      <label>Value<input name="value" type="number" /></label>
-      <label>Minimum Order<input name="minimumOrderValue" type="number" /></label>
+            <label class="full">Code<input name="code" required maxlength="32" /></label>
+            <label>Discount type<select name="type"><option value="percentage">Percentage of seller profit</option><option value="fixed">Fixed amount from seller profit (LRD)</option></select></label>
+            <label>Value<input name="value" type="number" min="0.01" step="0.01" required /></label>
+            <label>Minimum eligible order (LRD)<input name="minimumOrderValue" type="number" min="0" step="0.01" value="0" /></label>
+            <label>Applies to<select name="scope" id="couponScope"><option value="all">All eligible products</option><option value="selected">Selected products</option></select></label>
+            <div id="couponProductSelection" class="full hidden">
+                <strong>Select products</strong>
+                ${eligibleProducts.length ? eligibleProducts.map((item) => `<label><input type="checkbox" name="productIds" value="${escapeHtml(item.id)}" /> ${escapeHtml(item.name || 'Product')}</label>`).join('') : '<div class="muted">No eligible master-catalog products with seller profit are available.</div>'}
+            </div>
       <label class="full">Expiry<input name="expiryDate" type="date" /></label>
-      <label>Status<select name="status"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
+            <label>Status<select name="status"><option value="active">Active</option><option value="inactive">Inactive</option></select></label>
     </form>`;
     modalActions.innerHTML = `
     <button class="ghost-btn" id="cancelCoupon">Cancel</button>
     <button class="primary-btn" id="saveCoupon">Save</button>`;
     modalBackdrop.classList.remove('hidden');
+    document.getElementById('couponScope').addEventListener('change', (event) => {
+        document.getElementById('couponProductSelection').classList.toggle('hidden', event.target.value !== 'selected');
+    });
     document.getElementById('saveCoupon').addEventListener('click', async () => {
-        const formData = Object.fromEntries(new FormData(document.getElementById('couponForm')));
-        await db.collection('sellers').doc(state.sellerId).collection('coupons').add({ ...formData, createdAt: new Date(), updatedAt: new Date() });
+        const form = document.getElementById('couponForm');
+        const couponFormData = new FormData(form);
+        const formData = Object.fromEntries(couponFormData);
+        const code = String(formData.code || '').trim().toUpperCase();
+        const value = Number(formData.value);
+        const minimumOrderValue = Number(formData.minimumOrderValue || 0);
+        const productIds = couponFormData.getAll('productIds').map(String);
+        if (!code || state.coupons.some((coupon) => String(coupon.code || '').trim().toUpperCase() === code)) {
+            createToast(code ? 'That coupon code already exists in your store.' : 'Enter a coupon code.', 'warning');
+            return;
+        }
+        if (!Number.isFinite(value) || value <= 0 || (formData.type === 'percentage' && value > 100)) {
+            createToast(formData.type === 'percentage' ? 'Enter a percentage from 0.01 to 100.' : 'Enter a fixed amount greater than zero.', 'warning');
+            return;
+        }
+        if (!Number.isFinite(minimumOrderValue) || minimumOrderValue < 0) {
+            createToast('Minimum order value cannot be negative.', 'warning');
+            return;
+        }
+        if (formData.scope === 'selected' && !productIds.length) {
+            createToast('Select at least one product for this coupon.', 'warning');
+            return;
+        }
+        await db.collection('sellers').doc(state.sellerId).collection('coupons').add({
+            code,
+            type: formData.type,
+            value,
+            minimumOrderValue,
+            scope: formData.scope,
+            productIds: formData.scope === 'selected' ? productIds : [],
+            expiryDate: formData.expiryDate || '',
+            status: formData.status,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
         closeModal();
         await loadCoupons();
         renderCoupons();
@@ -2532,9 +3269,8 @@ function openCouponModal() {
     document.getElementById('cancelCoupon').addEventListener('click', closeModal);
 }
 
-async function createNotification(recipientUid, title, message, type = 'system') {
-    if (!recipientUid) return;
-    await db.collection('notifications').add({ recipientUid, title, message, type, read: false, isDeleted: false, createdAt: new Date() });
+async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '') {
+    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type });
 }
 
 async function notifyDeliveryPartnersForOrder(sellerId, sellerName, orderId) {
@@ -2546,14 +3282,10 @@ async function notifyDeliveryPartnersForOrder(sellerId, sellerName, orderId) {
         ...(state.deliveryUsers || []).filter((user) => (user.approvedSellers || []).includes(sellerId)).map((user) => user.uid || user.id).filter(Boolean)
     ]));
     if (!partnerUids.length) return;
-    await Promise.all(partnerUids.map((uid) => db.collection('notifications').add({
-        recipientUid: uid,
+    await Promise.all(partnerUids.map((uid) => createRoleNotification(db, uid, 'delivery_person', {
         title: 'Order ready for pickup',
-        message: `${sellerName || 'Your seller'} marked order #${orderId.slice(0, 6)} as ready for pickup.`,
-        type: 'delivery',
-        read: false,
-        isDeleted: false,
-        createdAt: new Date()
+        message: `${sellerName || 'Your seller'} marked order #${orderId.slice(0, 6)} as ready for pickup. You have 48 hours to complete delivery.`,
+        type: 'delivery'
     })));
 }
 
@@ -2575,6 +3307,10 @@ async function handleOrderAction(action, orderId) {
     const currentOrder = orderDoc.data() || {};
     if (['ready'].includes(action) && currentOrder.paymentStatus !== 'confirmed') {
         createToast('This order is waiting for admin payment confirmation.', 'warning');
+        return;
+    }
+    if (action === 'ready' && !canFulfillCustomizedOrder(currentOrder)) {
+        createToast('This customized order is waiting for the customization fee to be paid and confirmed.', 'warning');
         return;
     }
     if (currentOrder.status === 'received') return;
@@ -2612,7 +3348,7 @@ async function handleOrderAction(action, orderId) {
                 updatedAt: new Date()
             });
             if (currentOrder.customerUid) {
-                await createNotification(currentOrder.customerUid, 'Refund sent for confirmation', `The seller sent ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}. Check your phone or mobile-money account, then confirm receipt for order #${currentOrder.orderNumber || orderId.slice(0, 6)}. Reference: ${paymentReference.trim()}`, 'refund');
+                await createNotification(currentOrder.customerUid, 'Refund sent for confirmation', `The seller sent ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}. Check your phone or mobile-money account, then confirm receipt for order #${currentOrder.orderNumber || orderId.slice(0, 6)}. Reference: ${paymentReference.trim()}`, 'refund', 'customer');
             }
             await loadOrders();
             renderOrders();
@@ -2627,7 +3363,7 @@ async function handleOrderAction(action, orderId) {
                 updatedAt: new Date()
             });
             if (currentOrder.customerUid) {
-                await createNotification(currentOrder.customerUid, 'Refund rejected', `Refund for order #${currentOrder.orderNumber || orderId.slice(0, 6)} was rejected by the seller.`, 'refund');
+                await createNotification(currentOrder.customerUid, 'Refund rejected', `Refund for order #${currentOrder.orderNumber || orderId.slice(0, 6)} was rejected by the seller.`, 'refund', 'customer');
             }
             await loadOrders();
             renderOrders();
@@ -2637,7 +3373,14 @@ async function handleOrderAction(action, orderId) {
         openOrderDetails(currentOrder);
         return;
     }
-    await orderRef.update({ status: nextStatus, updatedAt: new Date() });
+    const readyAt = nextStatus === 'ready' && currentOrder.status !== 'ready' ? new Date() : null;
+    const orderUpdate = { status: nextStatus, updatedAt: new Date() };
+    if (readyAt) {
+        orderUpdate.readyAt = readyAt;
+        orderUpdate.deliveryDeadlineHours = 48;
+        orderUpdate.deliveryDeadlineAt = new Date(readyAt.getTime() + 48 * 60 * 60 * 1000);
+    }
+    await orderRef.update(orderUpdate);
     if (currentOrder.customerUid) {
         const customerNotifications = {
             reject: { title: 'Order cancelled', message: 'Your order was cancelled by the seller.', type: 'order' },
@@ -2645,7 +3388,7 @@ async function handleOrderAction(action, orderId) {
         };
         const notification = customerNotifications[action];
         if (notification) {
-            await createNotification(currentOrder.customerUid, notification.title, notification.message, notification.type);
+            await createNotification(currentOrder.customerUid, notification.title, notification.message, notification.type, 'customer');
         }
     }
     if (nextStatus === 'ready' && currentOrder.sellerId) {
@@ -2736,10 +3479,11 @@ function openOrderDetails(order) {
         ${Array.isArray(order.items) && order.items.length ? order.items.map((item) => `
           <div class="item-card" style="margin-top:8px;padding:10px;border-radius:12px;">
             <div style="display:flex;align-items:center;gap:10px;">
-              <img src="${getImageUrl(item.imagePath || item.image || item.imageFilename || '')}" alt="${item.name || 'Item'}" style="width:56px;height:56px;object-fit:cover;border-radius:10px;" onerror="this.src='./images/placeholder.png'" />
+              <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(item.imagePath || item.image || item.imageFilename || ''))}" data-full-src="${escapeHtml(getImageUrl(item.imagePath || item.image || item.imageFilename || ''))}" loading="lazy" decoding="async" alt="${escapeHtml(item.name || 'Item')}" style="width:56px;height:56px;object-fit:cover;border-radius:10px;" />
               <div>
                 <div><strong>${item.name || 'Item'}</strong> × ${item.quantity || 1}</div>
                 <div class="muted">${item.description || item.sellerDescription || 'Freshly prepared item'}</div>
+                ${getVariantDisplayEntries(item).length ? `<div class="muted">${getVariantDisplayEntries(item).map((variant) => `${escapeHtml(variant.label)}: ${escapeHtml(variant.value)}`).join(' • ')}</div>` : ''}
               </div>
             </div>
           </div>`).join('') : '<div class="muted">None</div>'}

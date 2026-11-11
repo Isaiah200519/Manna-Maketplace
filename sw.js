@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v4-image-preview';
+const CACHE_NAME = 'manna-static-v21-checkout-maintenance-fixes';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',
@@ -10,8 +10,18 @@ const ASSETS_TO_CACHE = [
     './app.js',
     './auth.js',
     './button-utils.js',
+    './wallet-utils.js',
     './image-preview.js',
+    './image-loader.js',
+    './theme.css',
+    './theme-utils.js',
+    './maintenance-mode.js',
+    './maintenance-utils.mjs',
+    './network-utils.mjs',
+    './product-variant-utils.mjs',
+    './customization-utils.mjs',
     './password-toggle.js',
+    './pwa-install.js',
     './images/logo/marketplace-logo.svg',
     './favicon.ico',
     './manifest.json'
@@ -37,30 +47,51 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
     const requestUrl = new URL(event.request.url);
-    const isAppCode = requestUrl.origin === self.location.origin &&
-        (event.request.mode === 'navigate' || /\.(?:html|js|mjs)$/.test(requestUrl.pathname));
-
-    if (isAppCode) {
-        event.respondWith(
-            fetch(event.request).then((response) => {
-                const responseCopy = response.clone();
-                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseCopy));
-                return response;
-            }).catch(() => caches.match(event.request))
+    const isTrustedExternalScript = event.request.destination === 'script'
+        && (
+            (requestUrl.hostname === 'www.gstatic.com'
+                && /^\/firebasejs\/10\.12\.2\/firebase-(?:app|auth|firestore|functions)-compat\.js$/.test(requestUrl.pathname))
+            || (requestUrl.hostname === 'cdn.jsdelivr.net'
+                && requestUrl.pathname === '/npm/qrcodejs@1.0.0/qrcode.min.js')
         );
+    if ((requestUrl.origin !== self.location.origin && !isTrustedExternalScript) || event.request.method !== 'GET') {
         return;
     }
 
-    event.respondWith(
-        caches.match(event.request).then((cachedResponse) => {
-            if (cachedResponse) {
-                return cachedResponse;
+    const isStaticAsset = isTrustedExternalScript
+        || event.request.mode === 'navigate'
+        || /\.(?:html|js|mjs|css|svg|png|jpe?g|webp|ico|woff2?)$/i.test(requestUrl.pathname);
+    if (!isStaticAsset) return;
+
+    const cacheRequest = async (cache, response) => {
+        if ((response.type === 'opaque' && !isTrustedExternalScript)
+            || (response.type !== 'opaque' && !response.ok)
+            || /no-store/i.test(response.headers.get('Cache-Control') || '')) {
+            return response;
+        }
+        try {
+            await cache.put(event.request, response.clone());
+        } catch (error) {
+            console.warn('[Manna Marketplace] Static cache update failed:', error);
+        }
+        return response;
+    };
+
+    event.respondWith(caches.open(CACHE_NAME).then(async (cache) => {
+        const cachedResponse = await cache.match(event.request);
+        if (cachedResponse) return cachedResponse;
+        try {
+            return await fetch(event.request).then((response) => cacheRequest(cache, response));
+        } catch (error) {
+            console.warn('[Manna Marketplace] Static asset request failed:', error);
+            if (event.request.mode === 'navigate') {
+                const appShell = await cache.match('./index.html');
+                if (appShell) return appShell;
             }
-            return fetch(event.request).catch(() => {
-                if (event.request.mode === 'navigate') {
-                    return caches.match('./index.html');
-                }
-            });
-        })
-    );
+            return new Response(
+                event.request.mode === 'navigate' ? 'This page is unavailable offline.' : '',
+                { status: 503, statusText: 'Service Unavailable' }
+            );
+        }
+    }));
 });
