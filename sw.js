@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v28-marketplace';
+const CACHE_NAME = 'manna-static-v29-marketplace';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',
@@ -64,7 +64,8 @@ self.addEventListener('fetch', (event) => {
     if (!isStaticAsset) return;
 
     const cacheRequest = async (cache, response) => {
-        if ((response.type === 'opaque' && !isTrustedExternalScript)
+        if (response.redirected
+            || (response.type === 'opaque' && !isTrustedExternalScript)
             || (response.type !== 'opaque' && !response.ok)
             || /no-store/i.test(response.headers.get('Cache-Control') || '')) {
             return response;
