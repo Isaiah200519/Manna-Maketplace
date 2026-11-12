@@ -14,9 +14,11 @@ const staticExtensions = new Set([
     '.mjs',
     '.png',
     '.svg',
+    '.txt',
     '.webp',
     '.woff',
-    '.woff2'
+    '.woff2',
+    '.xml'
 ]);
 const excludedFiles = new Set([
     'build-static-site.mjs',

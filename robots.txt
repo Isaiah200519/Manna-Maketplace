@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /functions/
+
+# Panel URLs stay crawlable so crawlers can process their noindex meta tags.
+Sitemap: https://mannamarketplace.online/sitemap.xml
