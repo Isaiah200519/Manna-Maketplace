@@ -3,6 +3,7 @@
   "name": "manna-maketplace",
   "compatibility_date": "2026-11-12",
   "assets": {
-    "directory": "./public"
+    "directory": "./public",
+    "html_handling": "none"
   }
 }
