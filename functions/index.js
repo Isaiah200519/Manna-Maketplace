@@ -5,13 +5,6 @@ const { FieldValue, getFirestore } = require('firebase-admin/firestore');
 const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
-const {
-    projectPublicCatalogSettings,
-    projectPublicInventoryItem,
-    projectPublicMenuItem,
-    projectPublicPromotion,
-    projectPublicSeller
-} = require('./public-catalog-utils');
 
 initializeApp();
 
@@ -23,10 +16,6 @@ const REWARD_ORDER_TYPE = 'signup_blind_box';
 const LEGACY_SESSION_ID = 'legacy';
 const DEFAULT_CUSTOMER_LIMIT = 25;
 const MAX_CUSTOMER_LIMIT = 1000;
-const PUBLIC_CATALOG_CACHE_MS = 60 * 1000;
-let publicCatalogCache = null;
-let publicCatalogCacheExpiresAt = 0;
-let publicCatalogLoadPromise = null;
 
 function normalizeCoordinatesValue(value) {
     if (!value || typeof value !== 'object') return null;
@@ -103,83 +92,6 @@ function createBlindBoxAssignments(products) {
     }
     return shuffled.map((product) => ({ boxId: randomUUID(), productId: product.id }));
 }
-
-async function loadPublicCatalog() {
-    const [sellerSnapshot, platformSettingsSnapshot, adminSettingsSnapshot] = await Promise.all([
-        db.collection('sellers').where('status', '==', 'approved').where('isActive', '==', true).get(),
-        db.collection('settings').doc('platform').get(),
-        db.collection('adminSettings').doc('config').get()
-    ]);
-    const sellerDocuments = sellerSnapshot.docs.filter((sellerDoc) => !['rest-pizza', 'rest-burger', 'rest-dominos'].includes(sellerDoc.id));
-    const sellers = [];
-    const products = [];
-    const promotions = {};
-
-    for (let batchStart = 0; batchStart < sellerDocuments.length; batchStart += 6) {
-        const batch = sellerDocuments.slice(batchStart, batchStart + 6);
-        const results = await Promise.all(batch.map(async (sellerDoc) => {
-            const sellerData = sellerDoc.data() || {};
-            const sellerRef = db.collection('sellers').doc(sellerDoc.id);
-            const [menuSnapshot, promotionSnapshot, inventorySnapshot] = await Promise.all([
-                sellerRef.collection('menu').limit(200).get(),
-                sellerRef.collection('promotions').limit(50).get(),
-                sellerRef.collection('internationalInventory').limit(200).get()
-            ]);
-            const seller = projectPublicSeller(sellerDoc.id, sellerData);
-            const sellerPromotions = promotionSnapshot.docs
-                .map((promotionDoc) => projectPublicPromotion(promotionDoc.id, promotionDoc.data() || {}));
-            const sellerProducts = [
-                ...menuSnapshot.docs
-                    .filter((menuDoc) => {
-                        const item = menuDoc.data() || {};
-                        return item.isAvailable === true || item.availability === true;
-                    })
-                    .map((menuDoc) => projectPublicMenuItem(menuDoc.id, sellerDoc.id, sellerData, menuDoc.data() || {})),
-                ...inventorySnapshot.docs
-                    .filter((inventoryDoc) => {
-                        const item = inventoryDoc.data() || {};
-                        return item.status === 'active' && Number(item.quantity || 0) > 0;
-                    })
-                    .map((inventoryDoc) => projectPublicInventoryItem(inventoryDoc.id, sellerDoc.id, sellerData, inventoryDoc.data() || {}))
-            ];
-            return { seller, sellerPromotions, sellerProducts };
-        }));
-
-        for (const result of results) {
-            sellers.push(result.seller);
-            promotions[result.seller.id] = result.sellerPromotions;
-            products.push(...result.sellerProducts);
-        }
-    }
-
-    return {
-        sellers,
-        products,
-        promotions,
-        catalogSettings: projectPublicCatalogSettings({
-            ...(platformSettingsSnapshot.exists ? platformSettingsSnapshot.data() || {} : {}),
-            ...(adminSettingsSnapshot.exists ? adminSettingsSnapshot.data() || {} : {})
-        }),
-        generatedAt: new Date().toISOString()
-    };
-}
-
-exports.getPublicCatalog = onCall({ region: 'us-central1', cors: true, maxInstances: 3, timeoutSeconds: 60 }, async () => {
-    if (publicCatalogCache && publicCatalogCacheExpiresAt > Date.now()) return publicCatalogCache;
-    if (publicCatalogLoadPromise) return publicCatalogLoadPromise;
-
-    publicCatalogLoadPromise = loadPublicCatalog()
-        .then((catalog) => {
-            publicCatalogCache = catalog;
-            publicCatalogCacheExpiresAt = Date.now() + PUBLIC_CATALOG_CACHE_MS;
-            return catalog;
-        })
-        .finally(() => {
-            publicCatalogLoadPromise = null;
-        });
-
-    return publicCatalogLoadPromise;
-});
 
 exports.assignSignupBlindBox = onDocumentCreated({ document: 'users/{uid}', retry: true }, async (event) => {
     const user = event.data?.data();

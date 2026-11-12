@@ -6,7 +6,7 @@
     "node": "20"
   },
   "scripts": {
-    "check": "node --check index.js && node --check public-catalog-utils.js && node --test public-catalog-utils.test.js"
+    "check": "node --check index.js"
   },
   "dependencies": {
     "firebase-admin": "^13.0.2",

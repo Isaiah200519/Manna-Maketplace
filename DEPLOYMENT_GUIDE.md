@@ -57,14 +57,6 @@ Updating `firestore.indexes.json` locally does not create the indexes in the Fir
 
 Sellers purchase international offers into their private `sellers/{sellerId}/internationalInventory` subcollection. Inventory records retain `internationalProductId` and `masterProductId` references instead of copying master catalog documents. Sellers can edit resale price, currency, quantity, and customer-facing resale details; only active inventory with quantity remaining appears in the customer storefront.
 
-### Public guest catalog
-
-Unauthenticated customers load the public catalog from the `getPublicCatalog` Firebase callable function. The function uses a field whitelist and does not change Firestore security rules. Deploy it to the `manna-marketplace` Firebase project when the function source changes:
-
-```powershell
-firebase deploy --only functions:getPublicCatalog --project manna-marketplace
-```
-
 Run the frontend locally by serving the project directory with a static web server such as VS Code Live Server. Firebase callable functions require Firebase configuration and network access.
 
 ## Seed development data

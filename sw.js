@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v27-guest-marketplace';
+const CACHE_NAME = 'manna-static-v28-marketplace';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',

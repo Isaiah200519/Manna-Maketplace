@@ -1,5 +1,4 @@
 import { initStorage, clearStoredAuthState, serverTimestamp, geoPoint } from './storage.js';
-import { firebaseServices } from './firebase-config.js';
 import { formatCurrency, formatDate, createToast, getImageUrl, getProductThumbnailUrl, getSellerImageUrl, calculateDistance, copyText, dialUSSD, getCommunityOptions, escapeHtml, convertCurrency, normalizeCurrency, getAvatarHtml, getHelpArticlesByContext } from './utils.js';
 import { renderExpandableDescription } from './description-utils.js';
 import { createRoleNotification } from './notification-utils.js';
@@ -101,8 +100,6 @@ function isLegacyRestaurantSeller(seller) {
 const state = {
     authUser: null,
     customerProfile: null,
-    guestMode: false,
-    publicCatalogLoaded: false,
     sellers: [],
     menuItems: [],
     orders: [],
@@ -193,9 +190,6 @@ const cartButton = document.getElementById('cartButton');
 const cartCount = document.getElementById('cartCount');
 const cartCountWrap = document.getElementById('cartCountWrap');
 const cartButtonLabel = document.getElementById('cartButtonLabel');
-const guestModeNotice = document.getElementById('guestModeNotice');
-const continueBrowsingButton = document.getElementById('continueBrowsingButton');
-const guestSignInButton = document.getElementById('guestSignInButton');
 const sectionPanels = Array.from(document.querySelectorAll('.section-panel'));
 const pageTitle = document.getElementById('pageTitle');
 const pageSubtitle = document.getElementById('pageSubtitle');
@@ -209,7 +203,6 @@ let storage = null;
 let db = null;
 let auth = null;
 let homeSearchTimeout = null;
-let guestCatalogLoadPromise = null;
 
 function getWhatsAppUrl(phone, message) {
     const normalizedPhone = String(phone || '').replace(/[^\d]/g, '');
@@ -1004,8 +997,6 @@ function bindEvents() {
     showRegisterButton?.addEventListener('click', () => toggleAuthMode(true));
     showLoginButton?.addEventListener('click', () => toggleAuthMode(false));
     forgotPasswordButton?.addEventListener('click', handleForgotPassword);
-    continueBrowsingButton?.addEventListener('click', activateGuestMode);
-    guestSignInButton?.addEventListener('click', () => requestGuestSignIn());
     logoutButton?.addEventListener('click', handleLogout);
     const openMobileMenu = (event) => {
         if (event) {
@@ -1038,10 +1029,6 @@ function bindEvents() {
     }
     document.getElementById('mobileLogoutButton')?.addEventListener('click', handleLogout);
     cartButton?.addEventListener('click', () => {
-        if (state.guestMode) {
-            requestGuestSignIn();
-            return;
-        }
         showSection('checkout');
     });
     if (notificationsToggle) {
@@ -1310,7 +1297,10 @@ async function handleLogout() {
         clearStoredAuthState();
         state.authUser = null;
         state.customerProfile = null;
-        await activateGuestMode();
+        toggleAuthMode(false);
+        authMessage.textContent = '';
+        authScreen.classList.remove('hidden');
+        appShell.classList.add('hidden');
     }
 }
 
@@ -1326,7 +1316,8 @@ async function handleAuthStateChange(user) {
             state.authUser = null;
             state.customerProfile = null;
         }
-        await activateGuestMode();
+        authScreen.classList.remove('hidden');
+        appShell.classList.add('hidden');
         return;
     }
     state.authUser = user;
@@ -1339,10 +1330,6 @@ async function handleAuthStateChange(user) {
         const profile = userDoc.exists ? userDoc.data() : { uid: user.uid, displayName: user.displayName || user.email, email: user.email, role: 'customer' };
         const role = profile?.role;
         if (isAdminOnlyEmail(user.email) || role !== 'customer') {
-            state.guestMode = false;
-            document.body.classList.remove('customer-guest-mode');
-            guestModeNotice?.classList.add('hidden');
-            continueBrowsingButton?.classList.add('hidden');
             authMessage.textContent = 'This account is not authorized for the customer panel.';
             authScreen.classList.remove('hidden');
             appShell.classList.add('hidden');
@@ -1350,10 +1337,6 @@ async function handleAuthStateChange(user) {
             return;
         }
         state.customerProfile = profile;
-        state.guestMode = false;
-        document.body.classList.remove('customer-guest-mode');
-        guestModeNotice?.classList.add('hidden');
-        continueBrowsingButton?.classList.add('hidden');
         cartButtonLabel.textContent = 'Checkout';
         cartCountWrap?.classList.remove('hidden');
         notificationsToggle?.classList.remove('hidden');
@@ -1370,119 +1353,6 @@ async function handleAuthStateChange(user) {
         console.error(error);
         createToast(error.message || 'Could not load customer dashboard.', 'error');
     }
-}
-
-async function activateGuestMode() {
-    const alreadyGuest = state.guestMode;
-    state.guestMode = true;
-    document.body.classList.add('customer-guest-mode');
-    authScreen.classList.add('hidden');
-    appShell.classList.remove('hidden');
-    guestModeNotice?.classList.remove('hidden');
-    continueBrowsingButton?.classList.remove('hidden');
-    cartButtonLabel.textContent = 'Sign in to order';
-    cartCountWrap?.classList.add('hidden');
-    notificationsToggle?.classList.add('hidden');
-
-    if (!alreadyGuest) {
-        state.customerProfile = null;
-        state.sellers = [];
-        state.menuItems = [];
-        state.orders = [];
-        state.favorites = [];
-        state.addresses = [];
-        state.locations = [];
-        state.notifications = [];
-        state.helpArticles = [];
-        state.sellerPromotions = {};
-        state.adminCatalogPriceRule = null;
-        state.selectedSeller = null;
-        state.cart = normalizeCartState({ items: [] });
-        state.publicCatalogLoaded = false;
-        renderCartSummaryForGuest();
-    }
-
-    showSection('home');
-    if (state.publicCatalogLoaded) return;
-    if (!guestCatalogLoadPromise) {
-        guestCatalogLoadPromise = loadGuestCatalog().finally(() => {
-            guestCatalogLoadPromise = null;
-        });
-    }
-    await guestCatalogLoadPromise;
-}
-
-function renderCartSummaryForGuest() {
-    if (cartCount) cartCount.textContent = '0';
-}
-
-async function loadGuestCatalog() {
-    const homeContent = document.getElementById('homeContent');
-    if (homeContent) homeContent.innerHTML = '<div class="empty-state" role="status">Loading the public marketplace…</div>';
-
-    try {
-        const functions = firebaseServices?.app?.functions('us-central1');
-        if (!functions) throw new Error('Firebase Functions is not available.');
-        const response = await functions.httpsCallable('getPublicCatalog')();
-        if (!state.guestMode) return;
-        const catalog = response.data || {};
-        if (!Array.isArray(catalog.sellers) || !Array.isArray(catalog.products)) {
-            throw new Error('The public catalog response is invalid.');
-        }
-
-        state.sellers = catalog.sellers.filter((seller) => !isLegacyRestaurantSeller(seller));
-        state.sellerPromotions = catalog.promotions || {};
-        state.adminCatalogPriceRule = getActiveCatalogPriceRule(catalog.catalogSettings || {});
-        state.menuItems = sortMenuItemsForCustomer(catalog.products.map((item) => applySellerPromotion(
-            item.isInventoryItem ? item : applyCatalogDiscount(item, state.adminCatalogPriceRule),
-            state.sellerPromotions[item.sellerId] || []
-        )));
-        state.categories = [...new Set(state.menuItems.map((item) => getCategoryDisplayName(item.category)).filter(Boolean))];
-        state.publicCatalogLoaded = true;
-        customerHomeFeedDirty = false;
-        renderHome();
-        renderSellers();
-        showSection('home');
-
-        const params = new URLSearchParams(window.location.search);
-        const sellerId = String(params.get('sellerId') || '').trim();
-        const productId = String(params.get('productId') || '').trim();
-        if (sellerId && productId) {
-            const product = state.menuItems.find((item) => item.id === productId && item.sellerId === sellerId);
-            if (product) {
-                await openSeller(sellerId);
-                openProductDetails(productId);
-            } else {
-                createToast('This shared product is unavailable or no longer listed.', 'warning');
-            }
-        }
-    } catch (error) {
-        if (!state.guestMode) return;
-        console.error('[Manna Marketplace] Public catalog could not be loaded:', error);
-        createToast('The marketplace could not be loaded. Please try again.', 'error');
-        if (homeContent) {
-            homeContent.innerHTML = '<div class="empty-state">We could not load the marketplace. <button class="ghost-btn" id="retryGuestCatalogButton" type="button">Try again</button></div>';
-            document.getElementById('retryGuestCatalogButton')?.addEventListener('click', () => {
-                activateGuestMode();
-            });
-        }
-    }
-}
-
-function requestGuestSignIn(product = null) {
-    if (product?.sellerId && product?.id) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('sellerId', product.sellerId);
-        url.searchParams.set('productId', product.id);
-        window.history.replaceState({}, document.title, url.href);
-    }
-    toggleAuthMode(false);
-    authMessage.textContent = product
-        ? 'Sign in or create an account to order this product. We will bring you back to it after sign-in.'
-        : 'Sign in or create an account to place an order.';
-    authScreen.classList.remove('hidden');
-    appShell.classList.add('hidden');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function cleanupListeners() {
@@ -2150,10 +2020,6 @@ function renderHome() {
         document.getElementById('openSignupRewardButton')?.addEventListener('click', () => isSelected ? showSignupRewardReveal(state.signupRewardClaim) : openSignupRewardModal());
     }
     document.querySelectorAll('[data-add-order]').forEach((button) => button.addEventListener('click', () => {
-        if (state.guestMode) {
-            addToCart(button.dataset.addOrder);
-            return;
-        }
         withButtonState(button, () => addToCart(button.dataset.addOrder), { loadingText: 'Adding...', successText: 'In Cart', permanent: true });
     }));
     document.querySelectorAll('[data-favorite-item]').forEach((button) => button.addEventListener('click', () => toggleFavoriteItem(button.dataset.favoriteItem)));
@@ -2203,16 +2069,6 @@ function openCommunityFilterModal() {
 }
 
 function renderSellers() {
-    const nearestOption = document.querySelector('#sellerSort option[value="distance"]');
-    if (nearestOption) {
-        nearestOption.disabled = state.guestMode;
-        nearestOption.textContent = state.guestMode ? 'Nearest (saved location)' : 'Nearest';
-    }
-    if (state.guestMode && state.filters.sort === 'distance') {
-        state.filters.sort = 'rating';
-        const sellerSort = document.getElementById('sellerSort');
-        if (sellerSort) sellerSort.value = 'rating';
-    }
     const filtered = state.sellers.filter((seller) => {
         const search = state.searchQuery || '';
         const matchesSearch = !search || `${seller.name} ${seller.description || ''}`.toLowerCase().includes(search);
@@ -2248,25 +2104,20 @@ async function openSeller(sellerId) {
     const seller = state.sellers.find((entry) => entry.id === sellerId);
     if (!seller) return;
     state.selectedSeller = seller;
-    let menuItems;
-    if (state.guestMode) {
-        menuItems = state.menuItems.filter((item) => item.sellerId === sellerId);
-    } else {
-        const [menuSnapshot, promotionSnapshot] = await Promise.all([
-            db.collection('sellers').doc(sellerId).collection('menu').where('availability', '==', true).get(),
-            db.collection('sellers').doc(sellerId).collection('promotions').get()
-        ]);
-        const sellerPromotions = promotionSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        menuItems = menuSnapshot.docs.map((doc) => applySellerPromotion(
-            applyCatalogDiscount({ id: doc.id, ...doc.data() }, state.adminCatalogPriceRule),
-            sellerPromotions
-        ));
-        const internationalSnapshot = await db.collection('sellers').doc(sellerId).collection('internationalInventory').where('status', '==', 'active').get();
-        internationalSnapshot.docs.forEach((doc) => {
-            const item = doc.data() || {};
-            if (Number(item.quantity || 0) > 0) menuItems.push({ id: doc.id, ...item, price: Number(item.resalePrice || 0), currency: normalizeCurrency(item.resaleCurrency), sellerDescription: item.resaleDescription || item.sourceDescription || '' });
-        });
-    }
+    const [menuSnapshot, promotionSnapshot] = await Promise.all([
+        db.collection('sellers').doc(sellerId).collection('menu').where('availability', '==', true).get(),
+        db.collection('sellers').doc(sellerId).collection('promotions').get()
+    ]);
+    const sellerPromotions = promotionSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const menuItems = menuSnapshot.docs.map((doc) => applySellerPromotion(
+        applyCatalogDiscount({ id: doc.id, ...doc.data() }, state.adminCatalogPriceRule),
+        sellerPromotions
+    ));
+    const internationalSnapshot = await db.collection('sellers').doc(sellerId).collection('internationalInventory').where('status', '==', 'active').get();
+    internationalSnapshot.docs.forEach((doc) => {
+        const item = doc.data() || {};
+        if (Number(item.quantity || 0) > 0) menuItems.push({ id: doc.id, ...item, price: Number(item.resalePrice || 0), currency: normalizeCurrency(item.resaleCurrency), sellerDescription: item.resaleDescription || item.sourceDescription || '' });
+    });
     document.getElementById('sellerDetailContent').innerHTML = `
     <div class="panel-card">
       <div class="panel-card-header">
@@ -4065,10 +3916,6 @@ function showSection(section) {
     if (section === 'cart') {
         section = 'checkout';
     }
-    if (state.guestMode && !['home', 'sellers', 'sellerDetail'].includes(section)) {
-        requestGuestSignIn();
-        return;
-    }
     state.activeSection = section;
     document.body.classList.toggle('customer-home-active', section === 'home');
     setActiveNavigation(section);
@@ -4237,22 +4084,6 @@ function getShoeVariants(item) {
 function openProductDetails(menuItemId) {
         const item = state.menuItems.find((entry) => entry.id === menuItemId);
         if (!item) return;
-        if (state.guestMode) {
-            openModal(item.name || 'Product details', `
-                <div class="stack">
-                    <img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(item.imageFilename || item.image || ''))}" data-full-src="${escapeHtml(getImageUrl(item.imageFilename || item.image || ''))}" alt="${escapeHtml(item.name || 'Product')}" decoding="async" style="width:100%; max-height:240px; object-fit:cover; border-radius:12px;" />
-                    <p>${escapeHtml(item.sellerDescription || item.description || 'No product description provided.')}</p>
-                    <div class="muted"><strong>Price:</strong> ${renderProductPrice(item)}</div>
-                    <div class="muted"><strong>Category:</strong> ${escapeHtml(getCategoryDisplayName(item.category || 'General'))}</div>
-                    <div class="muted"><strong>Seller:</strong> ${escapeHtml(item.sellerName || 'Seller')}</div>
-                </div>`);
-            modalActions.innerHTML = '<button class="primary-btn" id="guestProductSignInButton" type="button">Sign in to order</button>';
-            document.getElementById('guestProductSignInButton')?.addEventListener('click', () => {
-                closeModal();
-                requestGuestSignIn(item);
-            });
-            return;
-        }
         const seller = state.sellers.find((entry) => entry.id === item.sellerId);
         const storageOptions = getStorageOptions(item);
         openModal(item.name || 'Product details', `
@@ -4363,10 +4194,6 @@ function openShoeChooser(item, button) {
 }
 
 async function addToCart(menuItemId, storageSize = '', color = '', shoeSize = '', variantValues = {}) {
-    if (state.guestMode) {
-        requestGuestSignIn(state.menuItems.find((item) => item.id === menuItemId) || null);
-        return;
-    }
     const selectedItem = state.menuItems.find((item) => item.id === menuItemId);
     if (!selectedItem) return;
     const button = document.querySelector(`[data-add-order="${menuItemId}"]`);
@@ -5320,10 +5147,6 @@ function repeatOrder(orderId) {
 }
 
 async function toggleFavoriteSeller(sellerId) {
-    if (state.guestMode) {
-        requestGuestSignIn();
-        return;
-    }
     const seller = state.sellers.find((entry) => entry.id === sellerId);
     if (!seller) return;
     const ref = db.collection('users').doc(state.authUser.uid).collection('favorites').doc(sellerId);
@@ -5340,10 +5163,6 @@ async function toggleFavoriteSeller(sellerId) {
 }
 
 async function toggleFavoriteItem(menuItemId) {
-    if (state.guestMode) {
-        requestGuestSignIn();
-        return;
-    }
     const item = state.menuItems.find((entry) => entry.id === menuItemId);
     if (!item) return;
     const seller = state.sellers.find((entry) => entry.id === item.sellerId);

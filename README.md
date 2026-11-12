@@ -21,15 +21,7 @@ The platform supports shareable product checkout links. Sellers can copy a link 
 
 `https://mannamarketplace.online/customer.html?sellerId=SELLER_ID&productId=PRODUCT_ID`
 
-When a customer opens the link, the app verifies that the seller and available product exist, then pre-fills checkout with that product. Guests can browse the public catalog; signing in to order preserves the product link.
-
-## Guest catalog deployment
-
-Guest catalog data is returned by the Firebase callable function `getPublicCatalog`. Its server-side projection exposes only approved seller/catalog fields; Firestore rules remain private. Deploy the Firebase function when it changes:
-
-```powershell
-firebase deploy --only functions:getPublicCatalog --project manna-marketplace
-```
+When a customer opens the link, the app verifies that the seller and available product exist, then pre-fills checkout with that product after sign-in.
 
 Deploy the static frontend through the existing Cloudflare workflow. Do not deploy the site with Firebase Hosting or Netlify.
 
