@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v25-firestore-connection-resilience';
+const CACHE_NAME = 'manna-static-v26-product-share-links';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',

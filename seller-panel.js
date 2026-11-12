@@ -15,6 +15,7 @@ import { generateLocalListingDraft } from './listing-assistant.mjs';
 import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
 import { watchMaintenanceMode } from './maintenance-mode.js';
 import { createLocationMap, loadLeaflet, normalizeCoordinates } from './location-utils.mjs';
+import { createCustomerProductShareUrl } from './share-link-utils.mjs';
 
 const state = {
     authUser: null,
@@ -1461,17 +1462,14 @@ function getMenuItemCreatedAt(item) {
 }
 
 function getMenuItemShareUrl(menuId) {
-    const shareUrl = new URL('https://celadon-kleicha-be1d68.netlify.app/');
-    shareUrl.searchParams.set('sellerId', state.sellerId);
-    shareUrl.searchParams.set('productId', menuId);
-    return shareUrl.href;
+    return createCustomerProductShareUrl(state.sellerId, menuId);
 }
 
 async function shareMenuItem(menuId) {
     const item = state.menuItems.find((entry) => entry.id === menuId);
     if (!item || !state.sellerId) return;
     const copied = await copyText(getMenuItemShareUrl(menuId));
-    createToast(copied ? 'Product checkout link copied.' : 'Unable to copy the product link.', copied ? 'success' : 'error');
+    createToast(copied ? 'Product link copied.' : 'Unable to copy the product link.', copied ? 'success' : 'error');
 }
 
 function renderOrders() {
