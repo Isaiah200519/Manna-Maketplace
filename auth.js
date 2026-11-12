@@ -17,7 +17,6 @@ export function setupAuthRouter(options = {}) {
     const registerSubmitButton = registerForm?.querySelector('button[type="submit"]');
     const showRegisterButton = document.getElementById('showRegisterButton');
     const showLoginButton = document.getElementById('showLoginButton');
-    const seedButton = document.getElementById('seedButton');
     const showResetButton = document.getElementById('showResetButton');
     const passwordResetForm = document.getElementById('passwordResetForm');
     const resetPasswordButton = document.getElementById('resetPasswordButton');
@@ -110,13 +109,6 @@ export function setupAuthRouter(options = {}) {
     document.getElementById('loginGoogleButton')?.addEventListener('click', () => setMessage('Google sign-in is unavailable in local mode.', 'info'));
     document.getElementById('registerGoogleButton')?.addEventListener('click', () => setMessage('Google sign-in is unavailable in local mode.', 'info'));
     document.querySelectorAll('[id*="Phone"]').forEach((button) => button.addEventListener('click', () => setMessage('Phone sign-in is unavailable in local mode.', 'info')));
-
-    seedButton?.addEventListener('click', async () => {
-        if (typeof window.seedDatabase === 'function') {
-            await window.seedDatabase();
-            setMessage('Demo data seeded locally.', 'success');
-        }
-    });
 
     auth.onAuthStateChanged((user) => {
         if (user) roleForUser(user).then(redirect);

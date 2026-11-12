@@ -17,14 +17,3 @@ async function seedDatabase() {
 
 window.seedDatabase = seedDatabase;
 window.seedCategories = () => ensureCategoriesSeeded(initStorage().db);
-
-if (typeof document !== 'undefined') {
-    document.addEventListener('DOMContentLoaded', () => {
-        const seedButton = document.getElementById('seedButton');
-        if (seedButton) {
-            seedButton.addEventListener('click', async () => {
-                await seedDatabase();
-            });
-        }
-    });
-}

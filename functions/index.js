@@ -5,6 +5,13 @@ const { FieldValue, getFirestore } = require('firebase-admin/firestore');
 const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { HttpsError, onCall } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
+const {
+    projectPublicCatalogSettings,
+    projectPublicInventoryItem,
+    projectPublicMenuItem,
+    projectPublicPromotion,
+    projectPublicSeller
+} = require('./public-catalog-utils');
 
 initializeApp();
 
@@ -16,6 +23,32 @@ const REWARD_ORDER_TYPE = 'signup_blind_box';
 const LEGACY_SESSION_ID = 'legacy';
 const DEFAULT_CUSTOMER_LIMIT = 25;
 const MAX_CUSTOMER_LIMIT = 1000;
+const PUBLIC_CATALOG_CACHE_MS = 60 * 1000;
+let publicCatalogCache = null;
+let publicCatalogCacheExpiresAt = 0;
+let publicCatalogLoadPromise = null;
+
+function normalizeCoordinatesValue(value) {
+    if (!value || typeof value !== 'object') return null;
+    const latitudeValue = value.latitude ?? value.lat;
+    const longitudeValue = value.longitude ?? value.lng;
+    if (latitudeValue === null || longitudeValue === null
+        || String(latitudeValue ?? '').trim() === '' || String(longitudeValue ?? '').trim() === '') return null;
+    const latitude = Number(latitudeValue);
+    const longitude = Number(longitudeValue);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) return null;
+    return { latitude, longitude };
+}
+
+function calculateStraightLineDistanceKm(first, second) {
+    const toRadians = (degrees) => degrees * Math.PI / 180;
+    const latitudeDelta = toRadians(second.latitude - first.latitude);
+    const longitudeDelta = toRadians(second.longitude - first.longitude);
+    const haversine = Math.sin(latitudeDelta / 2) ** 2
+        + Math.cos(toRadians(first.latitude)) * Math.cos(toRadians(second.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
+    return 2 * 6371.0088 * Math.asin(Math.sqrt(Math.min(1, haversine)));
+}
 
 function toTimestampMillis(value) {
     if (value?.toMillis) return value.toMillis();
@@ -70,6 +103,83 @@ function createBlindBoxAssignments(products) {
     }
     return shuffled.map((product) => ({ boxId: randomUUID(), productId: product.id }));
 }
+
+async function loadPublicCatalog() {
+    const [sellerSnapshot, platformSettingsSnapshot, adminSettingsSnapshot] = await Promise.all([
+        db.collection('sellers').where('status', '==', 'approved').where('isActive', '==', true).get(),
+        db.collection('settings').doc('platform').get(),
+        db.collection('adminSettings').doc('config').get()
+    ]);
+    const sellerDocuments = sellerSnapshot.docs.filter((sellerDoc) => !['rest-pizza', 'rest-burger', 'rest-dominos'].includes(sellerDoc.id));
+    const sellers = [];
+    const products = [];
+    const promotions = {};
+
+    for (let batchStart = 0; batchStart < sellerDocuments.length; batchStart += 6) {
+        const batch = sellerDocuments.slice(batchStart, batchStart + 6);
+        const results = await Promise.all(batch.map(async (sellerDoc) => {
+            const sellerData = sellerDoc.data() || {};
+            const sellerRef = db.collection('sellers').doc(sellerDoc.id);
+            const [menuSnapshot, promotionSnapshot, inventorySnapshot] = await Promise.all([
+                sellerRef.collection('menu').limit(200).get(),
+                sellerRef.collection('promotions').limit(50).get(),
+                sellerRef.collection('internationalInventory').limit(200).get()
+            ]);
+            const seller = projectPublicSeller(sellerDoc.id, sellerData);
+            const sellerPromotions = promotionSnapshot.docs
+                .map((promotionDoc) => projectPublicPromotion(promotionDoc.id, promotionDoc.data() || {}));
+            const sellerProducts = [
+                ...menuSnapshot.docs
+                    .filter((menuDoc) => {
+                        const item = menuDoc.data() || {};
+                        return item.isAvailable === true || item.availability === true;
+                    })
+                    .map((menuDoc) => projectPublicMenuItem(menuDoc.id, sellerDoc.id, sellerData, menuDoc.data() || {})),
+                ...inventorySnapshot.docs
+                    .filter((inventoryDoc) => {
+                        const item = inventoryDoc.data() || {};
+                        return item.status === 'active' && Number(item.quantity || 0) > 0;
+                    })
+                    .map((inventoryDoc) => projectPublicInventoryItem(inventoryDoc.id, sellerDoc.id, sellerData, inventoryDoc.data() || {}))
+            ];
+            return { seller, sellerPromotions, sellerProducts };
+        }));
+
+        for (const result of results) {
+            sellers.push(result.seller);
+            promotions[result.seller.id] = result.sellerPromotions;
+            products.push(...result.sellerProducts);
+        }
+    }
+
+    return {
+        sellers,
+        products,
+        promotions,
+        catalogSettings: projectPublicCatalogSettings({
+            ...(platformSettingsSnapshot.exists ? platformSettingsSnapshot.data() || {} : {}),
+            ...(adminSettingsSnapshot.exists ? adminSettingsSnapshot.data() || {} : {})
+        }),
+        generatedAt: new Date().toISOString()
+    };
+}
+
+exports.getPublicCatalog = onCall({ region: 'us-central1', cors: true, maxInstances: 3, timeoutSeconds: 60 }, async () => {
+    if (publicCatalogCache && publicCatalogCacheExpiresAt > Date.now()) return publicCatalogCache;
+    if (publicCatalogLoadPromise) return publicCatalogLoadPromise;
+
+    publicCatalogLoadPromise = loadPublicCatalog()
+        .then((catalog) => {
+            publicCatalogCache = catalog;
+            publicCatalogCacheExpiresAt = Date.now() + PUBLIC_CATALOG_CACHE_MS;
+            return catalog;
+        })
+        .finally(() => {
+            publicCatalogLoadPromise = null;
+        });
+
+    return publicCatalogLoadPromise;
+});
 
 exports.assignSignupBlindBox = onDocumentCreated({ document: 'users/{uid}', retry: true }, async (event) => {
     const user = event.data?.data();
@@ -499,15 +609,17 @@ exports.submitSignupRewardOrder = onCall(async (request) => {
     const userRef = db.collection('users').doc(uid);
     const claimRef = db.collection(CLAIMS_COLLECTION).doc(uid);
     const campaignRef = db.doc(CAMPAIGN_PATH);
+    const settingsRef = db.collection('adminSettings').doc('config');
     const orderRef = db.collection('orders').doc();
     let result;
 
     await db.runTransaction(async (transaction) => {
-        const [userSnapshot, claimSnapshot, campaignSnapshot, addressSnapshot] = await Promise.all([
+        const [userSnapshot, claimSnapshot, campaignSnapshot, addressSnapshot, settingsSnapshot] = await Promise.all([
             transaction.get(userRef),
             transaction.get(claimRef),
             transaction.get(campaignRef),
-            transaction.get(userRef.collection('addresses').where('isActive', '==', true).limit(1))
+            transaction.get(userRef.collection('addresses').where('isActive', '==', true).limit(1)),
+            transaction.get(settingsRef)
         ]);
         if (!userSnapshot.exists || userSnapshot.data()?.role !== 'customer') {
             throw new HttpsError('permission-denied', 'Only customer accounts can order this reward.');
@@ -528,6 +640,7 @@ exports.submitSignupRewardOrder = onCall(async (request) => {
             throw new HttpsError('not-found', 'The reward session for this claim is unavailable.');
         }
         const campaign = sessionSnapshot.exists ? sessionSnapshot.data() || {} : campaignSnapshot.data() || {};
+        const platformSettings = settingsSnapshot.exists ? settingsSnapshot.data() || {} : {};
         const campaignProducts = Array.isArray(campaign.products) ? campaign.products : [];
         const campaignProductIndex = campaignProducts.findIndex((item) => item.id === claim.selectedProduct.id);
         if (campaignProductIndex < 0) throw new HttpsError('failed-precondition', 'The selected reward is no longer in this campaign.');
@@ -538,6 +651,25 @@ exports.submitSignupRewardOrder = onCall(async (request) => {
         if (!hasUsableAddress(user, address)) {
             throw new HttpsError('failed-precondition', 'Save your delivery address before placing the reward order.');
         }
+        const warehouse = platformSettings.warehouseLocation || {};
+        const warehouseCoordinates = normalizeCoordinatesValue(warehouse);
+        if (!warehouseCoordinates) {
+            throw new HttpsError('failed-precondition', 'The admin must configure the warehouse pickup location before reward orders can be placed.');
+        }
+        const customerCoordinates = normalizeCoordinatesValue(address.coordinates)
+            || normalizeCoordinatesValue(address)
+            || normalizeCoordinatesValue(user.deliveryAddress);
+        if (!customerCoordinates) {
+            throw new HttpsError('failed-precondition', 'Confirm a delivery map pin before placing the reward order.');
+        }
+        const rawDeliveryRate = platformSettings.distanceDeliveryRatePerKm;
+        const deliveryRatePerKm = Number(rawDeliveryRate);
+        if (rawDeliveryRate === null || rawDeliveryRate === undefined || String(rawDeliveryRate).trim() === ''
+            || !Number.isFinite(deliveryRatePerKm) || deliveryRatePerKm < 0) {
+            throw new HttpsError('failed-precondition', 'The admin must configure the distance delivery rate before reward orders can be placed.');
+        }
+        const deliveryDistanceKm = calculateStraightLineDistanceKm(warehouseCoordinates, customerCoordinates);
+        const deliveryFee = Math.round(deliveryDistanceKm * deliveryRatePerKm * 100) / 100;
         const storageSize = String(selections.storageSize || '').trim();
         const color = String(selections.color || '').trim();
         const shoeSize = String(selections.shoeSize || '').trim();
@@ -589,14 +721,27 @@ exports.submitSignupRewardOrder = onCall(async (request) => {
             customerPhone: String(request.data?.customerPhone || user.phone || ''),
             sellerId: 'manna_marketplace',
             sellerName: 'Manna Marketplace Rewards',
+            warehouseName: warehouse.name || 'Manna Marketplace Warehouse',
+            warehouseAddress: warehouse.address || '',
+            warehouseCoordinates,
+            warehouseLocation: warehouseCoordinates ? {
+                name: warehouse.name || 'Manna Marketplace Warehouse',
+                address: warehouse.address || '',
+                ...warehouseCoordinates
+            } : null,
             internationalProductId: product.internationalProductId,
             masterProductId: product.masterProductId,
             fulfillmentSource: 'internationalProducts',
             address: addressLine,
             deliveryLocationId: addresses[0]?.id || '',
-            deliveryCoordinates: address.coordinates || null,
-            coordinates: address.coordinates || null,
+            deliveryCoordinates: customerCoordinates,
+            deliveryLat: customerCoordinates.latitude,
+            deliveryLng: customerCoordinates.longitude,
+            coordinates: customerCoordinates,
             deliveryLocationLabel: address.label || '',
+            deliveryDistanceKm,
+            deliveryRatePerKm,
+            deliveryFee,
             status: 'pending',
             paymentStatus: 'pending',
             paymentMethod: 'balance',
@@ -692,7 +837,6 @@ exports.confirmSignupRewardOrder = onCall(async (request) => {
 
         const settings = { ...(platformSnapshot.data() || {}), ...(adminSettingsSnapshot.data() || {}) };
         const regularDays = Math.max(1, Number(settings.regularDeliveryDays || 3));
-        const regularDeliveryFee = Math.max(0, Number(settings.regularDeliveryFee ?? settings.deliveryFee ?? 60) || 0);
         const now = new Date();
         const estimate = new Date(now.getTime() + regularDays * 24 * 60 * 60 * 1000);
         const deliveryDeadlineAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
@@ -711,7 +855,6 @@ exports.confirmSignupRewardOrder = onCall(async (request) => {
             paymentStatus: 'confirmed',
             paymentAmount: 0,
             customerDeliveryFee: 0,
-            deliveryFee: regularDeliveryFee,
             deliveryDays: regularDays,
             status: 'ready',
             readyAt: now,
@@ -740,7 +883,7 @@ exports.confirmSignupRewardOrder = onCall(async (request) => {
             && String(campaignSnapshot.data()?.sessionId || LEGACY_SESSION_ID) === sessionId) {
             transaction.update(campaignRef, updatedSession);
         }
-        result = { alreadyConfirmed: false, estimatedDeliveryTime: estimate.toISOString(), deliveryFee: regularDeliveryFee };
+        result = { alreadyConfirmed: false, estimatedDeliveryTime: estimate.toISOString(), deliveryFee: Number(order.deliveryFee || 0) };
     });
     return result;
 });

@@ -54,6 +54,7 @@
                 <button type="submit" class="primary-btn">Sign In</button>
                 <button type="button" id="showRegisterButton" class="ghost-btn">Create account</button>
                 <button type="button" id="forgotPasswordButton" class="text-btn">Forgot password?</button>
+                <button type="button" id="continueBrowsingButton" class="text-btn">Continue browsing as guest</button>
             </form>
             <form id="registerForm" class="auth-form hidden">
                 <label>Full Name<input id="registerName" required /></label>
@@ -163,7 +164,7 @@
                         <span>🔔</span>
                         <span id="customerNotificationBadgeCount" class="badge hidden">0</span>
                     </button>
-                    <button id="cartButton" class="primary-btn">Checkout (<span id="cartCount">0</span>)</button>
+                    <button id="cartButton" class="primary-btn"><span id="cartButtonLabel">Checkout</span> <span id="cartCountWrap">(<span id="cartCount">0</span>)</span></button>
                 </div>
             </header>
 
@@ -186,6 +187,10 @@
                         <input id="homeSearch" type="search" placeholder="Search sellers or products" />
                         <button class="primary-btn" data-section="sellers">Browse now</button>
                     </div>
+                </div>
+                <div id="guestModeNotice" class="guest-mode-notice hidden">
+                    <span><strong>Browsing as a guest.</strong> Sign in or create an account to save favorites and place an order.</span>
+                    <button id="guestSignInButton" class="ghost-btn" type="button">Sign in</button>
                 </div>
                 <div class="category-filter-shell" data-category-session>
                     <div class="desktop-category-chips">
@@ -348,25 +353,25 @@
                 fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M4 10.5L12 4l8 6.5" />
                 <path d="M6.5 10.5V20h11V10.5" />
-            </svg></button>
+            </svg><span>Home</span></button>
         <button class="mobile-nav-item" data-section="sellers" aria-label="Sellers"><svg viewBox="0 0 24 24"
                 fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M5 21V8" />
                 <path d="M19 21V5" />
                 <path d="M5 8l7-3 7 3" />
                 <path d="M9 21v-5h6v5" />
-            </svg></button>
+            </svg><span>Sellers</span></button>
         <button class="mobile-nav-item" data-section="orders" aria-label="Orders"><svg viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="1.8">
                 <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
                 <path d="M9 8h6M9 12h6M9 16h4" />
-            </svg></button>
+            </svg><span>Orders</span></button>
         <button class="mobile-nav-item" id="mobileMenuButton" aria-label="More"><svg viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="1.8">
                 <path d="M5 7h14" />
                 <path d="M5 12h14" />
                 <path d="M5 17h14" />
-            </svg></button>
+            </svg><span>More</span></button>
     </div>
 
     <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -379,7 +384,7 @@
     <script defer src="./image-preview.js"></script>
     <script defer src="./image-loader.js"></script>
     <script defer src="./pwa-install.js"></script>
-    <script type="module" src="./customer-panel.js?v=12"></script>
+    <script type="module" src="./customer-panel.js?v=13"></script>
     <script defer src="./password-toggle.js"></script>
     <script>
         if ('serviceWorker' in navigator) {

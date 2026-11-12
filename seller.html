@@ -19,6 +19,7 @@
 </head>
 
 <body class="panel-page seller-panel">
+    <a class="skip-link" href="#sellerMain">Skip to main content</a>
     <div id="onboardingOverlay" class="onboarding-overlay hidden" aria-hidden="true">
         <div class="onboarding-card">
             <h2>Welcome, Seller Partner</h2>
@@ -118,6 +119,7 @@
             </div>
             <nav class="sidebar-nav" aria-label="Seller navigation">
                 <div class="nav-list nav-links">
+                    <h3 class="nav-section-label">Store</h3>
                     <button class="nav-item active" data-section="dashboard"><span class="nav-icon"><svg
                                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                 <path d="M4 10.5L12 4l8 6.5" />
@@ -139,6 +141,7 @@
                                 <rect x="4" y="4" width="16" height="16" rx="2" />
                                 <path d="M8 8h8M8 12h8M8 16h5" />
                             </svg></span><span>Store</span></button>
+                    <h3 class="nav-section-label">Operations</h3>
                     <button class="nav-item" data-section="orders"><span class="nav-icon"><svg viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="1.8">
                                 <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
@@ -157,6 +160,7 @@
                                 <path d="M5 8l7-3 7 3" />
                                 <path d="M9 21v-5h6v5" />
                             </svg></span><span>Delivery Partners</span></button>
+                    <h3 class="nav-section-label">Growth</h3>
                     <button class="nav-item" data-section="promotions"><span class="nav-icon"><svg viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="1.8">
                                 <path d="M6 3h12v6l-2 2 2 2v6H6v-6l2-2-2-2z" />
@@ -171,6 +175,7 @@
                                 <path d="M12 19V5" />
                                 <path d="M19 19v-7" />
                             </svg></span><span>Analytics</span></button>
+                    <h3 class="nav-section-label">Account &amp; support</h3>
                     <button class="nav-item" data-section="notifications"><span class="nav-icon"><svg
                                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                                 <path d="M12 4a5 5 0 00-5 5v3l-1 2h12l-1-2V9a5 5 0 00-5-5z" />
@@ -201,7 +206,7 @@
             </div>
         </aside>
 
-        <main class="main-panel">
+        <main class="main-panel" id="sellerMain" tabindex="-1">
             <header class="topbar">
                 <div class="topbar-mobile-brand">
                     <div class="brand-block">
@@ -477,23 +482,23 @@
                 fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M4 10.5L12 4l8 6.5" />
                 <path d="M6.5 10.5V20h11V10.5" />
-            </svg></button>
+            </svg><span>Dashboard</span></button>
         <button class="mobile-nav-item" data-section="orders" aria-label="Orders"><svg viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="1.8">
                 <path d="M7 4h10l2 2v13l-2 2H7l-2-2V6l2-2z" />
                 <path d="M9 8h6M9 12h6M9 16h4" />
-            </svg></button>
+            </svg><span>Orders</span></button>
         <button class="mobile-nav-item" data-section="notifications" aria-label="Notifications"><svg viewBox="0 0 24 24"
                 fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M12 4a5 5 0 00-5 5v3l-1 2h12l-1-2V9a5 5 0 00-5-5z" />
                 <path d="M10 18a2 2 0 104 0" />
-            </svg></button>
+            </svg><span>Alerts</span></button>
         <button class="mobile-nav-item" id="mobileMenuButton" aria-label="More"><svg viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="1.8">
                 <path d="M5 7h14" />
                 <path d="M5 12h14" />
                 <path d="M5 17h14" />
-            </svg></button>
+            </svg><span>More</span></button>
     </div>
     <div id="modalBackdrop" class="modal-backdrop hidden">
         <div class="modal-card">

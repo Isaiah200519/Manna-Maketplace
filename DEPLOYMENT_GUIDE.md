@@ -1,14 +1,14 @@
 # Manna Marketplace Deployment Guide
 
-Manna Marketplace uses Firebase Authentication and Cloud Firestore when the Firebase SDK is available. The local storage adapter remains available as an offline preview fallback.
+Manna Marketplace uses Firebase Authentication, Cloud Firestore, and Firebase Cloud Functions. The local storage adapter remains available as an offline preview fallback.
 
 ## Live application
 
-The default live deployment is available at:
+The official production site is:
 
-<https://manna-marketplace.web.app/>
+<https://mannamarketplace.online/>
 
-The repository provides marketplace browsing, seller stores, checkout, order tracking, and role-based panels. Sellers can copy direct product checkout links containing `sellerId` and `productId`, and authenticated customers are taken to a pre-filled checkout. Unauthenticated visitors are sent through login while the link parameters are preserved.
+The frontend is served by the existing Cloudflare Worker deployment named `manna-maketplace`. This checkout does not include that Worker's Wrangler configuration; publish frontend changes through the existing Cloudflare deployment workflow. Firebase is used for authentication, database, and backend functions, not for static website hosting.
 
 ## Firebase setup
 
@@ -57,24 +57,21 @@ Updating `firestore.indexes.json` locally does not create the indexes in the Fir
 
 Sellers purchase international offers into their private `sellers/{sellerId}/internationalInventory` subcollection. Inventory records retain `internationalProductId` and `masterProductId` references instead of copying master catalog documents. Sellers can edit resale price, currency, quantity, and customer-facing resale details; only active inventory with quantity remaining appears in the customer storefront.
 
-## Run locally
+### Public guest catalog
 
-Serve the project directory with any static web server so browser modules and Firebase requests work reliably. For example, use VS Code Live Server or any static hosting provider.
+Unauthenticated customers load the public catalog from the `getPublicCatalog` Firebase callable function. The function uses a field whitelist and does not change Firestore security rules. Deploy it to the `manna-marketplace` Firebase project when the function source changes:
 
-## Seed demo data
+```powershell
+firebase deploy --only functions:getPublicCatalog --project manna-marketplace
+```
 
-On the landing page, use the demo-data action to create sample accounts and catalog data in the current browser.
+Run the frontend locally by serving the project directory with a static web server such as VS Code Live Server. Firebase callable functions require Firebase configuration and network access.
 
-In Firebase mode, the seed action creates the demo profiles and catalog documents in the shared Firestore project. Demo accounts are profile documents only; create their Authentication accounts separately or use the registration form.
+## Seed development data
 
-Local fallback demo accounts:
+The public landing page does not expose a demo-data button. For isolated development only, run `window.seedDatabase()` from the browser console on the locally served landing page. In Firebase mode, this writes to the configured Firestore project, so use a non-production Firebase project. The seed utility remains in the source.
 
-- Admin: `admin@manna.test`
-- Customer: `customer@manna.test`
-- Seller: `seller@manna.test`
-- Delivery: `delivery@manna.test`
-
-The local fallback data remains isolated to the browser profile that created it.
+The utility creates profile documents only; create Authentication accounts separately or use the registration form.
 
 ## Reset local data
 
