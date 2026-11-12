@@ -17,11 +17,39 @@
     box-sizing: border-box;
 }
 
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
 body {
     margin: 0;
     font-family: Inter, Segoe UI, Arial, sans-serif;
     background: var(--bg);
     color: var(--text);
+}
+
+.skip-link {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 3000;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    transform: translateY(-160%);
+}
+
+.skip-link:focus {
+    transform: translateY(0);
 }
 
 button,
@@ -1701,7 +1729,169 @@ input[type="search"]:focus {
 }
 
 .order-session-card {
+    gap: 0;
+    padding: 12px;
+}
+
+.customer-panel :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 3px solid var(--accent-2);
+    outline-offset: 3px;
+}
+
+.order-card-details {
+    min-width: 0;
+}
+
+.order-card-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: 12px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.order-card-summary::-webkit-details-marker {
+    display: none;
+}
+
+.order-card-summary-content {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.order-card-summary-content > img {
+    width: 58px;
+    height: 58px;
+    object-fit: cover;
+    border-radius: 12px;
+}
+
+.order-card-summary-text {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+.order-card-summary-text .panel-card-header {
+    margin: 0;
+}
+
+.order-card-summary-text .muted {
+    overflow-wrap: anywhere;
+}
+
+.order-delivery-partner {
+    font-weight: 600;
+}
+
+.order-card-chevron {
+    flex: 0 0 auto;
+    font-size: 1.25rem;
+    transition: transform 0.18s ease;
+}
+
+.order-card-details[open] .order-card-chevron {
+    transform: rotate(180deg);
+}
+
+.order-card-expanded {
+    display: grid;
+    gap: 12px;
+    padding-top: 16px;
+}
+
+.customer-order-route {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.customer-order-route > summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.order-route-overview {
+    display: grid;
+    gap: 8px;
+    overflow-wrap: anywhere;
+}
+
+.customer-order-route-map,
+.delivery-route-map,
+.seller-pickup-map {
+    width: 100%;
+    height: 280px;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--panel-2);
+}
+
+.order-delivery-contact {
+    overflow-wrap: anywhere;
+}
+
+.order-card-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.order-card-quick-actions > * {
+    flex: 0 1 auto;
+}
+
+.settings-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-option p {
+    margin: 5px 0 0;
+}
+
+.customer-panel .chat-list {
+    display: grid;
+    gap: 10px;
+    max-height: min(45vh, 360px);
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.customer-panel .chat-bubble {
+    max-width: 88%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px 14px 14px 4px;
+    background: var(--panel-2);
+    overflow-wrap: anywhere;
+}
+
+.customer-panel .chat-bubble.self {
+    justify-self: end;
+    border-radius: 14px 14px 4px 14px;
+    background: rgba(249, 115, 22, 0.14);
+}
+
+.customer-panel .chat-form {
+    display: grid;
+    gap: 10px;
 }
 
 .order-countdown-grid {
@@ -1759,6 +1949,25 @@ input[type="search"]:focus {
 @media (max-width: 600px) {
     .order-countdown-grid {
         grid-template-columns: 1fr;
+    }
+
+    .order-card-summary-content {
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 9px;
+    }
+
+    .order-card-summary-content > img {
+        width: 48px;
+        height: 48px;
+    }
+
+    .order-card-quick-actions > * {
+        flex: 1 1 140px;
+    }
+
+    .settings-option {
+        align-items: flex-start;
+        flex-direction: column;
     }
 }
 

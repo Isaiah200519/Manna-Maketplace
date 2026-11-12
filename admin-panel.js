@@ -11,6 +11,7 @@ import { applyTheme, applyThemePreference, bindThemePreferenceControl, getCurren
 import { getMaintenanceExpiryMs, isMaintenanceActive } from './maintenance-utils.mjs';
 import { getActiveCatalogPriceRule } from './pricing-utils.mjs';
 import { normalizeCatalogStockCount, setCatalogProductStock } from './catalog-stock-utils.mjs';
+import { getMapsLocationUrl, loadLeaflet, normalizeCoordinates } from './location-utils.mjs';
 import {
   canFulfillCustomizedOrder,
   getCustomizationFeeStatus,
@@ -84,6 +85,8 @@ const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const sidebarClose = document.getElementById('sidebarClose');
 let initialInternationalProductBackfillStarted = false;
 let adminDataSyncInitialized = false;
+let warehouseLocationMap = null;
+let warehouseLocationMarker = null;
 
 function seedData() {
   return state.data;
@@ -944,7 +947,6 @@ function renderSignupBlindBoxCampaign() {
     return `<div class="form-grid"><label>Blind box ${index + 1}<select name="rewardProduct${index}" ${isLocked ? 'disabled' : ''} required><option value="">Choose an active international product</option>${productOptions}</select></label><label>Reward quantity<input name="rewardQuantity${index}" type="number" min="1" step="1" value="${Number(configured.quantity || 1)}" ${isLocked ? 'disabled' : ''} required /></label></div>`;
   }).join('');
   const totalStock = configuredProducts.reduce((sum, item) => sum + Number(item.remainingQuantity ?? item.quantity ?? 0), 0);
-  const rewardDeliveryFee = Number(campaign.deliveryFee || state.data.settings.regularDeliveryFee || state.data.settings.deliveryFee || 60);
   content.innerHTML = `
     <section class="card">
       <div class="card-header"><div><h3 class="card-title">Customer Reward Sessions</h3><p class="card-subtitle">Set a date window and customer limit for each session. A customer can claim only once across all sessions.</p></div><span class="badge">${awardedCount} / ${customerLimit} assigned</span></div>
@@ -1791,15 +1793,18 @@ function renderSellers() {
         <table>
           <thead><tr><th>Seller</th><th>Owner</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
-            ${filtered.map((seller) => `
+            ${filtered.map((seller) => {
+              const sellerCoordinates = normalizeCoordinates(seller.storeCoordinates || seller.pickupCoordinates || seller.sellerCoordinates || seller.coordinates);
+              const sellerMapsUrl = getMapsLocationUrl(sellerCoordinates);
+              return `
               <tr>
                 <td><div style="display:flex;align-items:center;gap:10px"><img src="${getSellerImageUrl(seller)}" style="width:42px;height:42px;border-radius:10px" alt="${escapeHtml(seller.name)}" /><div><strong>${escapeHtml(seller.name)}</strong><div style="color:var(--muted);font-size:0.84rem">${escapeHtml(seller.phone)}</div></div></div></td>
                 <td>${escapeHtml(seller.ownerName)}</td>
-                <td>${escapeHtml(seller.location)}</td>
+                <td>${escapeHtml(seller.location)}${sellerCoordinates ? `<div class="muted">${sellerCoordinates.latitude.toFixed(5)}, ${sellerCoordinates.longitude.toFixed(5)}${sellerMapsUrl ? ` · <a href="${escapeHtml(sellerMapsUrl)}" target="_blank" rel="noopener noreferrer">Open seller location</a>` : ''}</div>` : ''}</td>
                 <td><span class="badge-status ${seller.status === 'approved' ? 'active' : seller.status === 'suspended' ? 'suspended' : 'pending'}">${escapeHtml(seller.status)}</span></td>
                 <td><div class="row-actions"><button class="secondary-btn" onclick="window.reviewSeller('${seller.id}')">Review</button><button class="secondary-btn" onclick="window.editSellerImage('${seller.id}')">Edit Image</button><button class="ghost-btn" onclick="window.updateSeller('${seller.id}','approved')">Approve</button><button class="ghost-btn" onclick="window.updateSeller('${seller.id}','suspended')">Suspend</button></div></td>
               </tr>
-            `).join('')}
+            `}).join('')}
           </tbody>
         </table>
       </div>
@@ -1819,6 +1824,8 @@ function renderSellers() {
 window.reviewSeller = (sellerId) => {
   const seller = state.data.sellers.find((item) => item.id === sellerId);
   if (!seller) return;
+  const sellerCoordinates = normalizeCoordinates(seller.storeCoordinates || seller.pickupCoordinates || seller.sellerCoordinates || seller.coordinates);
+  const sellerMapsUrl = getMapsLocationUrl(sellerCoordinates);
 
   openModal(`Review ${escapeHtml(seller.name || 'seller')}`, `
       <div class="form-grid" style="padding: 10px 0;">
@@ -1827,6 +1834,7 @@ window.reviewSeller = (sellerId) => {
         <label>Email<input value="${escapeHtml(seller.email || '')}" readonly /></label>
         <label>Phone<input value="${escapeHtml(seller.phone || '')}" readonly /></label>
         <label>Address<input value="${escapeHtml(seller.location || seller.address || '')}" readonly /></label>
+        <div class="full"><strong>Seller store coordinates:</strong> ${sellerCoordinates ? `${sellerCoordinates.latitude.toFixed(6)}, ${sellerCoordinates.longitude.toFixed(6)}${sellerMapsUrl ? ` · <a href="${escapeHtml(sellerMapsUrl)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>` : ''}` : 'No store pin saved'}. This is informational; customer orders use the admin warehouse as the only pickup location.</div>
         <label>Status<input value="${escapeHtml(seller.status || 'pending')}" readonly /></label>
         <label class="full">Seller image path<input id="sellerImagePath" value="${escapeHtml(seller.logo || seller.image || seller.imagePath || '')}" /></label>
         <label class="full">Admin Notes<textarea id="sellerReviewNotes">${escapeHtml(seller.reviewNotes || '')}</textarea></label>
@@ -2360,7 +2368,9 @@ async function saveOrderCustomizationFee(orderId, button) {
       message: fee === 0
         ? `The customization fee for order #${order.orderNumber || orderId.slice(0, 6)} was waived.`
         : `A customization fee of ${formatCurrency(fee, 'LRD')} was added to order #${order.orderNumber || orderId.slice(0, 6)}. Open the order to view payment instructions.`,
-      type: 'payment'
+      type: 'payment',
+      orderId,
+      action: 'open_order'
     });
     createToast(fee === 0 ? 'Customization fee waived.' : 'Customization fee saved on the order.', 'success');
     renderOrders();
@@ -2390,7 +2400,9 @@ async function confirmOrderCustomizationFee(orderId) {
     await createRoleNotification(initStorage().db, order.customerUid, 'customer', {
       title: 'Customization fee confirmed',
       message: `Your customization fee for order #${order.orderNumber || orderId.slice(0, 6)} was confirmed.`,
-      type: 'payment'
+      type: 'payment',
+      orderId,
+      action: 'open_order'
     });
     createToast('Customization fee payment confirmed.', 'success');
     renderOrders();
@@ -2422,7 +2434,9 @@ async function rejectOrderCustomizationFee(orderId) {
     await createRoleNotification(initStorage().db, order.customerUid, 'customer', {
       title: 'Customization fee payment needs review',
       message: `The payment for the customization fee on order #${order.orderNumber || orderId.slice(0, 6)} could not be confirmed. Please review the order and resubmit payment details.`,
-      type: 'payment'
+      type: 'payment',
+      orderId,
+      action: 'open_order'
     });
     createToast('Customization fee payment marked for resubmission.', 'warning');
     renderOrders();
@@ -2456,7 +2470,9 @@ window.confirmOrderPayment = async (orderId) => {
       message: canBeginFulfillment
         ? `Payment for order #${order.orderNumber || order.id.slice(0, 6)} was confirmed.`
         : `Product payment for order #${order.orderNumber || order.id.slice(0, 6)} was confirmed. This customized order will proceed after the customization fee is quoted and confirmed.`,
-      type: 'payment'
+      type: 'payment',
+      orderId,
+      action: 'open_order'
     });
     createToast(canBeginFulfillment
       ? isWalletPaid ? 'Wallet payment confirmed and seller revenue credited.' : 'Order payment confirmed and seller revenue credited.'
@@ -2568,7 +2584,7 @@ async function sendPaymentReminders() {
   await Promise.all(pendingOrders.map(async (order) => {
     await updateDocument('orders', order.id, { lastPaymentReminderAt: new Date(), paymentReminderCount: Number(order.paymentReminderCount || 0) + 1, updatedAt: new Date() });
     if (order.customerUid) {
-      await createRoleNotification(initStorage().db, order.customerUid, 'customer', { title: 'Payment confirmation pending', message: `Payment for order #${order.orderNumber || order.id.slice(0, 6)} is awaiting admin confirmation.`, type: 'payment' });
+      await createRoleNotification(initStorage().db, order.customerUid, 'customer', { title: 'Payment confirmation pending', message: `Payment for order #${order.orderNumber || order.id.slice(0, 6)} is awaiting admin confirmation.`, type: 'payment', orderId: order.id, action: 'open_order' });
     }
   }));
 }
@@ -2859,8 +2875,88 @@ async function resetAppToFactoryState() {
 
 window.resetAppToFactoryState = resetAppToFactoryState;
 
+async function initializeWarehouseLocationMap(savedCoordinates = null) {
+  const container = document.getElementById('warehouseLocationMap');
+  const status = document.getElementById('warehouseLocationMapStatus');
+  const mapsLink = document.getElementById('warehouseMapsLink');
+  if (!container) return;
+  if (savedCoordinates && mapsLink) {
+    mapsLink.href = getMapsLocationUrl(savedCoordinates);
+    mapsLink.hidden = !mapsLink.href;
+    mapsLink.textContent = `Open warehouse coordinates ${savedCoordinates.latitude.toFixed(6)}, ${savedCoordinates.longitude.toFixed(6)} in Google Maps`;
+  }
+  if (savedCoordinates && status) {
+    status.textContent = `Saved warehouse pin: ${savedCoordinates.latitude.toFixed(6)}, ${savedCoordinates.longitude.toFixed(6)}. Click or drag the pin to change it.`;
+  }
+  warehouseLocationMap?.remove();
+  warehouseLocationMap = null;
+  warehouseLocationMarker = null;
+  try {
+    const L = await loadLeaflet();
+    if (!container.isConnected) return;
+    const initial = savedCoordinates || { latitude: 6.3113, longitude: -10.8014 };
+    warehouseLocationMap = L.map(container, { scrollWheelZoom: false })
+      .setView([initial.latitude, initial.longitude], savedCoordinates ? 16 : 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(warehouseLocationMap);
+    const latitudeInput = document.getElementById('warehouseLatitude');
+    const longitudeInput = document.getElementById('warehouseLongitude');
+    const updateMapsLink = (point) => {
+      if (!mapsLink) return;
+      mapsLink.href = getMapsLocationUrl(point);
+      mapsLink.hidden = !mapsLink.href;
+      mapsLink.textContent = `Open warehouse coordinates ${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)} in Google Maps`;
+    };
+    const setWarehousePin = (latitude, longitude, pan = true) => {
+      const point = normalizeCoordinates({ latitude, longitude });
+      if (!point) return;
+      if (warehouseLocationMarker) warehouseLocationMarker.setLatLng([point.latitude, point.longitude]);
+      else {
+        warehouseLocationMarker = L.marker([point.latitude, point.longitude], { draggable: true }).addTo(warehouseLocationMap);
+        warehouseLocationMarker.on('dragend', () => {
+          const location = warehouseLocationMarker.getLatLng();
+          setWarehousePin(location.lat, location.lng, false);
+        });
+      }
+      latitudeInput.value = String(point.latitude);
+      longitudeInput.value = String(point.longitude);
+      updateMapsLink(point);
+      if (pan) warehouseLocationMap.panTo([point.latitude, point.longitude]);
+      if (status) status.textContent = `Warehouse pin selected: ${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}. Save this location to apply it to new orders.`;
+    };
+    warehouseLocationMap.on('click', (event) => setWarehousePin(event.latlng.lat, event.latlng.lng));
+    if (savedCoordinates) {
+      warehouseLocationMarker = L.marker([savedCoordinates.latitude, savedCoordinates.longitude], { draggable: true }).addTo(warehouseLocationMap);
+      warehouseLocationMarker.on('dragend', () => {
+        const location = warehouseLocationMarker.getLatLng();
+        setWarehousePin(location.lat, location.lng, false);
+      });
+      updateMapsLink(savedCoordinates);
+    }
+    const syncPinFromInputs = () => {
+      const point = normalizeCoordinates({ latitude: latitudeInput.value, longitude: longitudeInput.value });
+      if (!point) {
+        if (status) status.textContent = 'Enter a valid latitude and longitude, or select a warehouse pin on the map.';
+        return;
+      }
+      setWarehousePin(point.latitude, point.longitude);
+    };
+    latitudeInput.addEventListener('change', syncPinFromInputs);
+    longitudeInput.addEventListener('change', syncPinFromInputs);
+    if (status && !savedCoordinates) status.textContent = 'Click or drag the pin to select the warehouse in Liberia. The map center is only a starting view and is not saved automatically.';
+    window.setTimeout(() => warehouseLocationMap?.invalidateSize(), 100);
+  } catch (error) {
+    console.error('[Manna Marketplace] Warehouse location map failed to load:', error);
+    if (status) status.textContent = 'Map unavailable. Enter valid coordinates manually; no location was changed.';
+  }
+}
+
 function renderSettings() {
   const settings = state.data.settings || {};
+  const warehouseLocation = settings.warehouseLocation || {};
+  const warehouseCoordinates = normalizeCoordinates(warehouseLocation);
   const catalogPriceRule = getActiveCatalogPriceRule(settings);
   const catalogCategoryOptions = getCategoryOptions().map((category) => `
     <option value="${escapeHtml(category.id)}" ${catalogPriceRule?.categoryIds?.includes(category.id) ? 'selected' : ''}>${escapeHtml(category.name)}</option>
@@ -2898,6 +2994,25 @@ function renderSettings() {
     <section class="card">
       <div class="card-header">
         <div>
+          <h3 class="card-title">Warehouse Pickup & Distance Delivery</h3>
+          <p class="card-subtitle">New orders use this single warehouse as their pickup point. Delivery fees are calculated from the warehouse to the customer’s saved delivery coordinates using a straight-line distance estimate.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Warehouse name<input id="warehouseName" value="${escapeHtml(warehouseLocation.name || 'Manna Marketplace Warehouse')}" /></label>
+        <label class="full">Warehouse address or directions<input id="warehouseAddress" value="${escapeHtml(warehouseLocation.address || '')}" placeholder="Warehouse address in Liberia" /></label>
+        <label>Latitude<input id="warehouseLatitude" type="number" min="-90" max="90" step="any" value="${warehouseCoordinates ? escapeHtml(warehouseCoordinates.latitude) : ''}" /></label>
+        <label>Longitude<input id="warehouseLongitude" type="number" min="-180" max="180" step="any" value="${warehouseCoordinates ? escapeHtml(warehouseCoordinates.longitude) : ''}" /></label>
+        <label>Distance delivery rate (LRD per km)<input id="distanceDeliveryRatePerKm" type="number" min="0" step="0.01" value="${settings.distanceDeliveryRatePerKm ?? ''}" placeholder="Set the fee per kilometer" /></label>
+        <div id="warehouseLocationMap" class="warehouse-location-map full" role="application" aria-label="Select the warehouse pickup location"></div>
+        <p id="warehouseLocationMapStatus" class="card-subtitle full" aria-live="polite"></p>
+        <a id="warehouseMapsLink" class="muted full" hidden target="_blank" rel="noopener noreferrer"></a>
+        <div class="modal-actions full"><button class="primary-btn" id="saveWarehouseSettings" type="button">Save Warehouse & Delivery Rate</button></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-header">
+        <div>
           <h3 class="card-title">Catalog Stock Count</h3>
           <p class="card-subtitle">Set the available count for master catalog products and their linked seller copies. Seller-created products are not changed.</p>
         </div>
@@ -2920,9 +3035,6 @@ function renderSettings() {
         <label>Platform Name<input id="platformName" value="${escapeHtml(settings.platformName || 'Manna Marketplace')}" /></label>
         <label>Commission (%)<input id="commission" type="number" value="${escapeHtml(settings.commission || 8)}" /></label>
         <label>Currency<input id="currency" value="${escapeHtml(settings.currency || 'LRD')}" /></label>
-        <label>Default Delivery Fee<input id="deliveryFee" type="number" value="${escapeHtml(settings.deliveryFee || 60)}" /></label>
-        <label>Regular Delivery Fee<input id="regularDeliveryFee" type="number" value="${escapeHtml(settings.regularDeliveryFee || settings.deliveryFee || 60)}" /></label>
-        <label>Express Delivery Fee<input id="expressDeliveryFee" type="number" value="${escapeHtml(settings.expressDeliveryFee || 120)}" /></label>
         <label>Regular Delivery Days<input id="regularDeliveryDays" type="number" value="${escapeHtml(settings.regularDeliveryDays || 3)}" /></label>
         <label>Express Delivery Hours<input id="expressDeliveryHours" type="number" value="${escapeHtml(settings.expressDeliveryHours || 24)}" /></label>
         <label>Admin Orange Money Number<input id="adminOrangeMoneyNumber" value="${escapeHtml(settings.adminOrangeMoneyNumber || '')}" /></label>
@@ -3147,9 +3259,6 @@ function renderSettings() {
       platformName: document.getElementById('platformName').value,
       commission: Number(document.getElementById('commission').value || 0),
       currency: document.getElementById('currency').value,
-      deliveryFee: Number(document.getElementById('deliveryFee').value || 0),
-      regularDeliveryFee: Number(document.getElementById('regularDeliveryFee').value || 0),
-      expressDeliveryFee: Number(document.getElementById('expressDeliveryFee').value || 0),
       regularDeliveryDays: Number(document.getElementById('regularDeliveryDays').value || 3),
       expressDeliveryHours: Number(document.getElementById('expressDeliveryHours').value || 24),
       adminOrangeMoneyNumber: document.getElementById('adminOrangeMoneyNumber').value.trim(),
@@ -3216,6 +3325,54 @@ function renderSettings() {
     } finally {
       saveButton.disabled = false;
       saveButton.textContent = 'Save Settings';
+    }
+  });
+  initializeWarehouseLocationMap(warehouseCoordinates);
+  document.getElementById('saveWarehouseSettings').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const coordinates = normalizeCoordinates({
+      latitude: document.getElementById('warehouseLatitude').value,
+      longitude: document.getElementById('warehouseLongitude').value
+    });
+    const rawRate = document.getElementById('distanceDeliveryRatePerKm').value.trim();
+    const rate = Number(rawRate);
+    if (!coordinates) {
+      createToast('Select a valid warehouse pin in Liberia before saving.', 'warning');
+      return;
+    }
+    if (!rawRate || !Number.isFinite(rate) || rate < 0) {
+      createToast('Enter a valid delivery rate of zero or more LRD per kilometer.', 'warning');
+      return;
+    }
+    const nextSettings = {
+      warehouseLocation: {
+        name: document.getElementById('warehouseName').value.trim() || 'Manna Marketplace Warehouse',
+        address: document.getElementById('warehouseAddress').value.trim(),
+        latitude: coordinates.latitude,
+        longitude: coordinates.longitude
+      },
+      distanceDeliveryRatePerKm: rate,
+      updatedAt: new Date()
+    };
+    button.disabled = true;
+    button.textContent = 'Saving…';
+    try {
+      const storage = initStorage();
+      if (!storage?.db) throw new Error('Database is not available. Please refresh and try again.');
+      await Promise.all([
+        storage.db.collection('adminSettings').doc('config').set(nextSettings, { merge: true }),
+        storage.db.collection('settings').doc('platform').set(nextSettings, { merge: true })
+      ]);
+      state.data.settings = { ...state.data.settings, ...nextSettings };
+      persistData();
+      createToast('Warehouse location and distance delivery rate saved for new orders.', 'success');
+      renderSettings();
+    } catch (error) {
+      console.error('[Manna Marketplace] Warehouse and delivery settings save failed:', error);
+      createToast(error.message || 'Warehouse settings could not be saved.', 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Save Warehouse & Delivery Rate';
     }
   });
 }

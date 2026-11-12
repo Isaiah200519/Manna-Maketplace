@@ -7,6 +7,7 @@ import { createRoleNotification } from './notification-utils.js';
 import { bindSoundToggle, playSoundEffect, renderSoundToggle } from './sound-effects.js';
 import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
 import { watchMaintenanceMode } from './maintenance-mode.js';
+import { createLocationMap, distanceInKilometers, formatDistance, getMapsDirectionsUrl, getMapsLocationUrl, loadLeaflet, normalizeCoordinates } from './location-utils.mjs';
 
 let deliveryNotificationSnapshotReady = false;
 const deliveryOrderSnapshots = { ready: new Map(), assigned: new Map() };
@@ -27,6 +28,8 @@ const state = {
     selectedOrder: null,
     activeSection: 'dashboard',
     pendingClaimOrderIds: new Set(),
+    riderLocations: new Map(),
+    deliveryRouteMaps: new Map(),
     loading: false,
     profileUnsubscribe: null,
     sellersUnsubscribe: null,
@@ -366,7 +369,7 @@ function bindEvents() {
                     return result;
                 }, options).catch(() => { });
             } else {
-                handleAction(action, actionButton.dataset.id);
+                handleAction(action, actionButton.dataset.id, actionButton.dataset.response, actionButton.dataset.notificationId);
             }
         }
     });
@@ -665,6 +668,8 @@ function cleanupListeners() {
     [state.profileUnsubscribe, state.sellersUnsubscribe, state.deliveryRequestsUnsubscribe, state.deliveryPartnerRequestsUnsubscribe, state.readyOrdersUnsubscribe, state.assignedOrdersUnsubscribe, state.notificationsUnsubscribe, state.chatsUnsubscribe].forEach((unsubscribe) => { if (unsubscribe) unsubscribe(); });
     deliveryOrderSnapshots.ready.clear();
     deliveryOrderSnapshots.assigned.clear();
+    cleanupDeliveryRouteMaps();
+    state.riderLocations.clear();
     state.profileUnsubscribe = null;
     state.sellersUnsubscribe = null;
     state.deliveryRequestsUnsubscribe = null;
@@ -676,6 +681,7 @@ function cleanupListeners() {
 }
 
 function renderAll() {
+    cleanupDeliveryRouteMaps();
     renderDashboard();
     renderAvailableOrders();
     renderActiveDeliveries();
@@ -690,6 +696,7 @@ function renderAll() {
 }
 
 function renderAllLists() {
+    cleanupDeliveryRouteMaps();
     renderAvailableOrders();
     renderActiveDeliveries();
     renderHistory();
@@ -746,14 +753,15 @@ function renderDashboard() {
 }
 
 function getDeliveryLocationMeta(order) {
-    const latitude = Number(order.deliveryLat ?? order.coordinates?.latitude ?? order.deliveryLocation?.latitude ?? order.lat ?? order.latitude ?? null);
-    const longitude = Number(order.deliveryLng ?? order.coordinates?.longitude ?? order.deliveryLocation?.longitude ?? order.lng ?? order.longitude ?? null);
+    const coordinates = normalizeCoordinates(order.deliveryCoordinates || order.deliveryLocation || order.coordinates)
+        || normalizeCoordinates({ latitude: order.deliveryLat, longitude: order.deliveryLng })
+        || normalizeCoordinates({ latitude: order.latitude ?? order.lat, longitude: order.longitude ?? order.lng });
     const address = order.address || order.deliveryLocation?.address || order.deliveryDetails || order.deliveryLandmark || '';
     const label = order.deliveryLocationLabel || order.deliveryLandmark || order.deliveryDetails || address || 'Delivery address';
-    const mapsUrl = Number.isFinite(latitude) && Number.isFinite(longitude)
-        ? `https://www.google.com/maps?q=${latitude},${longitude}&z=16`
+    const mapsUrl = coordinates
+        ? `https://www.google.com/maps?q=${coordinates.latitude},${coordinates.longitude}&z=16`
         : `https://www.google.com/maps?q=${encodeURIComponent(address || label)}`;
-    return { latitude, longitude, address, label, mapsUrl };
+    return { ...coordinates, coordinates, address, label, mapsUrl };
 }
 
 function getDeliveryDeadline(order) {
@@ -767,25 +775,163 @@ function isDeliveryDeadlineExpired(order) {
     return Boolean(deadline && deadline.getTime() <= Date.now());
 }
 
-function renderDeliveryLocationMap(order) {
-    const { latitude, longitude, label, mapsUrl } = getDeliveryLocationMeta(order);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-        return '';
-    }
+function renderDeliveryLocationMap(order, { allowRiderLocation = true } = {}) {
+    if (order.deliveryPersonUid !== state.authUser?.uid) return '';
+    const warehouseCoordinates = normalizeCoordinates(order.warehouseCoordinates || order.warehouseLocation);
+    const customerCoordinates = getDeliveryLocationMeta(order).coordinates;
+    const warehouseLabel = order.warehouseAddress || order.warehouseName || 'Manna Marketplace Warehouse';
+    const customerLabel = getDeliveryLocationMeta(order).label;
+    const routeDistance = warehouseCoordinates && customerCoordinates
+        ? distanceInKilometers(warehouseCoordinates, customerCoordinates)
+        : null;
+    const routeUrl = getMapsDirectionsUrl(warehouseCoordinates, customerCoordinates);
+    const warehouseMapsUrl = getMapsLocationUrl(warehouseCoordinates);
+    const customerMapsUrl = getMapsLocationUrl(customerCoordinates);
+    const orderId = escapeHtml(order.id);
     return `
-      <div class="delivery-map-card">
-        <div class="map-hint">Google Maps • Live directions</div>
-        <iframe
-          title="Delivery location map"
-          loading="lazy"
-          referrerpolicy="no-referrer-when-downgrade"
-          src="https://www.google.com/maps?q=${latitude},${longitude}&z=15&output=embed"
-        ></iframe>
-        <div class="muted" style="font-size: 12px;">${label}</div>
-        <div class="action-row">
-          <a class="primary-btn" href="${mapsUrl}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>
+      <details class="delivery-map-card" data-delivery-route-details="${orderId}">
+        <summary>Show warehouse pickup and delivery map</summary>
+        <div class="delivery-route-overview">
+          <div><strong>Warehouse pickup:</strong> ${escapeHtml(warehouseLabel)}${warehouseCoordinates ? ` <span class="muted">(<a href="${escapeHtml(warehouseMapsUrl)}" target="_blank" rel="noopener noreferrer">${warehouseCoordinates.latitude.toFixed(5)}, ${warehouseCoordinates.longitude.toFixed(5)}</a>)</span>` : ' <span class="muted">(warehouse coordinates were not saved with this order)</span>'}</div>
+          <div><strong>Customer:</strong> ${escapeHtml(customerLabel)}${customerCoordinates ? ` <span class="muted">(<a href="${escapeHtml(customerMapsUrl)}" target="_blank" rel="noopener noreferrer">${customerCoordinates.latitude.toFixed(5)}, ${customerCoordinates.longitude.toFixed(5)}</a>)</span>` : ' <span class="muted">(delivery pin not set)</span>'}</div>
+          <div class="badge">Warehouse to customer: ${routeDistance === null ? 'Distance unavailable' : `${escapeHtml(formatDistance(routeDistance))} straight-line`}</div>
+          ${allowRiderLocation ? `<button class="ghost-btn" type="button" data-measure-rider-location="${orderId}">Measure my distance to warehouse</button>
+          <div class="map-status" data-rider-distance="${orderId}" aria-live="polite">Your GPS is not requested unless you choose the button above. Your current coordinates are not saved or shared.</div>` : ''}
+          ${routeUrl ? `<a class="primary-btn" href="${escapeHtml(routeUrl)}" target="_blank" rel="noopener noreferrer">Road directions: warehouse to customer</a>` : ''}
+          ${allowRiderLocation ? `<a class="ghost-btn" data-rider-directions="${orderId}" hidden target="_blank" rel="noopener noreferrer">Road directions: my location to warehouse</a>` : ''}
         </div>
-      </div>`;
+        <div class="delivery-route-map" data-delivery-route-map="${orderId}" role="img" aria-label="Map showing the warehouse pickup and customer delivery locations"></div>
+        <p class="muted">Distances are straight-line estimates between coordinates. Open Google Maps for road routes and turn-by-turn directions.</p>
+      </details>`;
+}
+
+function bindDeliveryRouteDetails(container) {
+    container.querySelectorAll('[data-delivery-route-details]').forEach((details) => {
+        details.addEventListener('toggle', () => {
+            const orderId = details.dataset.deliveryRouteDetails;
+            if (details.open) {
+                initializeDeliveryOrderMap(orderId, details);
+            } else {
+                state.deliveryRouteMaps.get(orderId)?.remove();
+                state.deliveryRouteMaps.delete(orderId);
+                state.riderLocations.delete(orderId);
+                const status = details.querySelector('[data-rider-distance]');
+                if (status) status.textContent = 'Your GPS is not requested unless you choose the button above. Your current coordinates are not saved or shared.';
+                const directions = details.querySelector('[data-rider-directions]');
+                if (directions) {
+                    directions.hidden = true;
+                    directions.removeAttribute('href');
+                }
+            }
+        });
+    });
+    container.querySelectorAll('[data-measure-rider-location]').forEach((button) => {
+        button.addEventListener('click', () => requestRiderPickupDistance(button.dataset.measureRiderLocation, button));
+    });
+}
+
+function cleanupDeliveryRouteMaps() {
+    state.deliveryRouteMaps.forEach((map) => map.remove());
+    state.deliveryRouteMaps.clear();
+    state.riderLocations.clear();
+}
+
+function getDeliveryOrderCoordinates(order) {
+    return {
+        warehouse: normalizeCoordinates(order.warehouseCoordinates || order.warehouseLocation),
+        customer: getDeliveryLocationMeta(order).coordinates,
+        warehouseName: order.warehouseName || 'Manna Marketplace Warehouse',
+        customerName: order.deliveryLocationLabel || order.customerName || 'Customer delivery'
+    };
+}
+
+async function initializeDeliveryOrderMap(orderId, details) {
+    const container = details.querySelector('[data-delivery-route-map]');
+    const order = state.allOrders.find((entry) => entry.id === orderId);
+    if (!container || !order || state.deliveryRouteMaps.has(orderId)) return;
+    const points = getDeliveryOrderCoordinates(order);
+    const riderCoordinates = state.riderLocations.get(orderId);
+    const locations = [
+        riderCoordinates ? { ...riderCoordinates, label: 'Your current location (this device only)' } : null,
+        points.warehouse ? { ...points.warehouse, label: `Warehouse pickup: ${points.warehouseName}` } : null,
+        points.customer ? { ...points.customer, label: `Customer: ${points.customerName}` } : null
+    ].filter(Boolean);
+    if (!locations.length) {
+        container.innerHTML = '<div class="empty-state">Map coordinates are not available. Ask the admin to set the warehouse pin and the customer to confirm a delivery pin.</div>';
+        return;
+    }
+    container.textContent = 'Loading route map…';
+    try {
+        await loadLeaflet();
+        if (!details.isConnected || !details.open || !container.isConnected) return;
+        const map = createLocationMap(container, locations);
+        state.deliveryRouteMaps.set(orderId, map);
+    } catch (error) {
+        console.error('[Manna Marketplace] Delivery route map failed to load:', error);
+        if (container.isConnected) container.textContent = 'Map unavailable. Saved coordinates and road directions remain available above.';
+    }
+}
+
+function requestRiderPickupDistance(orderId, button) {
+    const status = Array.from(document.querySelectorAll('[data-rider-distance]')).find((element) => element.dataset.riderDistance === orderId);
+    const details = Array.from(document.querySelectorAll('[data-delivery-route-details]')).find((element) => element.dataset.deliveryRouteDetails === orderId);
+    const order = state.allOrders.find((entry) => entry.id === orderId);
+    if (!order || order.deliveryPersonUid !== state.authUser?.uid || !status || !details?.open) return;
+    if (!navigator.geolocation || !window.isSecureContext) {
+        status.textContent = 'Current location requires browser permission and a secure connection. You can still use the warehouse-to-customer route.';
+        return;
+    }
+    state.riderLocations.delete(orderId);
+    state.deliveryRouteMaps.get(orderId)?.remove();
+    state.deliveryRouteMaps.delete(orderId);
+    const directions = Array.from(document.querySelectorAll('[data-rider-directions]')).find((element) => element.dataset.riderDirections === orderId);
+    if (directions) {
+        directions.hidden = true;
+        directions.removeAttribute('href');
+    }
+    button.disabled = true;
+    status.textContent = 'Requesting your current location… This position will only be used on this device.';
+    navigator.geolocation.getCurrentPosition(async (position) => {
+        if (!details.isConnected || !details.open || !button.isConnected) {
+            state.riderLocations.delete(orderId);
+            button.disabled = false;
+            return;
+        }
+        const riderCoordinates = normalizeCoordinates({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+        });
+        const warehouseCoordinates = getDeliveryOrderCoordinates(order).warehouse;
+        if (!riderCoordinates || !warehouseCoordinates) {
+            status.textContent = warehouseCoordinates
+                ? 'Your location could not be read as valid coordinates.'
+                : 'Warehouse pickup coordinates were not saved with this order.';
+            if (details?.open) await initializeDeliveryOrderMap(orderId, details);
+            button.disabled = false;
+            return;
+        }
+        state.riderLocations.set(orderId, riderCoordinates);
+        const distance = distanceInKilometers(riderCoordinates, warehouseCoordinates);
+        status.textContent = `You are approximately ${formatDistance(distance)} from the warehouse (straight-line). Your GPS is only held on this device and is not saved or shared.`;
+        const directions = Array.from(document.querySelectorAll('[data-rider-directions]')).find((element) => element.dataset.riderDirections === orderId);
+        if (directions) {
+            directions.href = getMapsDirectionsUrl(riderCoordinates, warehouseCoordinates);
+            directions.hidden = !directions.href;
+        }
+        if (details) {
+            state.deliveryRouteMaps.get(orderId)?.remove();
+            state.deliveryRouteMaps.delete(orderId);
+            if (details.open) await initializeDeliveryOrderMap(orderId, details);
+        }
+        button.disabled = false;
+    }, (error) => {
+        console.warn('[Manna Marketplace] Delivery partner current location unavailable:', error);
+        status.textContent = error.code === error.PERMISSION_DENIED
+            ? 'Location permission was denied. Allow location access in your browser to measure distance to pickup.'
+            : 'Could not read your current location. Check device location settings and try again.';
+        if (details?.open) initializeDeliveryOrderMap(orderId, details);
+        button.disabled = false;
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
 }
 
 function renderDeliveryOrderVariantDetails(order) {
@@ -819,6 +965,7 @@ function renderAvailableOrders() {
       </div>
     </div>`;
     }).join('') : '<div class="empty-state">No available orders from your approved sellers yet.</div>';
+    bindDeliveryRouteDetails(availableOrdersList);
     availableOrdersList.querySelectorAll('[data-action="pick-up-order"]').forEach((button) => {
         const order = state.allOrders.find((entry) => entry.id === button.dataset.id);
         if (order?.deliveryPersonUid === state.authUser?.uid) {
@@ -848,6 +995,7 @@ function renderActiveDeliveries() {
         <button class="ghost-btn" data-action="open-chat" data-id="${order.id}">Chat</button>
       </div>
     </div>`).join('') : '<div class="empty-state">No active deliveries right now.</div>';
+    bindDeliveryRouteDetails(activeDeliveriesList);
     activeDeliveriesList.querySelectorAll('[data-action="deliver-order"]').forEach((button) => {
         const order = state.allOrders.find((entry) => entry.id === button.dataset.id);
         if (order?.status === 'delivered') {
@@ -858,16 +1006,19 @@ function renderActiveDeliveries() {
 
 function renderHistory() {
     const history = state.allOrders.filter((order) => !order.isDeleted && order.deliveryPersonUid === state.authUser?.uid && ['delivered', 'received'].includes(order.status));
-    document.getElementById('historyList').innerHTML = history.length ? history.map((order) => `
+    const historyList = document.getElementById('historyList');
+    historyList.innerHTML = history.length ? history.map((order) => `
     <div class="item-card">
       <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status}</span></div>
     <div class="muted">${order.sellerName || 'Seller'} • ${order.orderType === 'signup_blind_box' ? `Delivery earning ${formatCurrency(order.deliveryFee || 0, 'LRD')}` : formatCurrency(order.total || 0)}</div>
       <div class="muted">${order.customerName || 'Customer'} • ${formatDate(order.updatedAt || order.createdAt)}</div>
     ${renderDeliveryOrderVariantDetails(order)}
-      <div class="action-row">
-        <button class="ghost-btn" data-action="open-chat" data-id="${order.id}">Chat</button>
-      </div>
-    </div>`).join('') : '<div class="empty-state">Delivery history is empty.</div>';
+      ${renderDeliveryLocationMap(order, { allowRiderLocation: false })}
+        <div class="action-row">
+          <button class="ghost-btn" data-action="open-chat" data-id="${order.id}">Chat</button>
+        </div>
+      </div>`).join('') : '<div class="empty-state">Delivery history is empty.</div>';
+      bindDeliveryRouteDetails(historyList);
 }
 
 function renderPartnerRequests() {
@@ -1063,6 +1214,7 @@ function renderNotifications() {
         <div class="muted">${formatDate(item.createdAt)}</div>
         <div class="action-row">
           <button class="ghost-btn" data-action="mark-notification-read" data-id="${item.id}">${item.read ? 'Read' : 'Mark as Read'}</button>
+          ${item.action === 'open_order_chat' && item.orderId ? `<button class="primary-btn" data-action="reply-order-message" data-id="${item.orderId}" data-notification-id="${item.id}">Reply to customer</button>` : ''}
           <button class="danger-btn" data-action="delete-notification" data-id="${item.id}">Delete</button>
         </div>
       </div>`).join('') : '<div class="empty-state">No notifications yet.</div>'}`;
@@ -1129,7 +1281,7 @@ function setClaimButtonState(orderId, isClaiming) {
     });
 }
 
-async function handleAction(action, id, response) {
+async function handleAction(action, id, response, notificationId = '') {
     if (!state.authUser) return;
     switch (action) {
         case 'pick-up-order':
@@ -1161,6 +1313,12 @@ async function handleAction(action, id, response) {
             await deactivateAccount();
             break;
         case 'open-chat':
+            await openChat(id);
+            break;
+        case 'reply-order-message':
+            if (notificationId) {
+                await markNotificationRead(notificationId);
+            }
             await openChat(id);
             break;
         default:
@@ -1251,7 +1409,7 @@ async function pickUpOrder(orderId) {
         assignedSuccessfully = true;
         await Promise.all([
             createNotification(state.authUser.uid, 'Order assigned', 'You picked up an order and it is now in transit.', 'delivery', 'delivery_person'),
-            order?.customerUid ? createNotification(order.customerUid, 'Order on the way', 'Your order is now on the way with a delivery partner.', 'delivery', 'customer') : Promise.resolve(),
+            order?.customerUid ? createNotification(order.customerUid, 'Order on the way', 'Your order is now on the way with a delivery partner.', 'delivery', 'customer', { orderId, action: 'open_order' }) : Promise.resolve(),
             order?.sellerId ? (async () => {
                 const seller = state.sellers.find((entry) => entry.id === order.sellerId);
                 if (seller?.ownerUid) {
@@ -1292,7 +1450,7 @@ async function markDelivered(orderId) {
             await creditDeliveryForOrder(state.authUser.uid, deliveryEarning, orderId);
         }
         if (order?.customerUid) {
-            await createNotification(order.customerUid, 'Delivery completed', 'Your order was delivered successfully.', 'delivery', 'customer');
+            await createNotification(order.customerUid, 'Delivery completed', 'Your order was delivered successfully.', 'delivery', 'customer', { orderId, action: 'confirm_order_received' });
         }
         if (order?.sellerId) {
             const seller = state.sellers.find((entry) => entry.id === order.sellerId);
@@ -1584,8 +1742,8 @@ function openSupportModal() {
     document.getElementById('cancelSupport').addEventListener('click', closeModal);
 }
 
-async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '') {
-    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type });
+async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '', context = {}) {
+    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type, ...context });
 }
 
 function getImagePath(filename, folder = 'products') {

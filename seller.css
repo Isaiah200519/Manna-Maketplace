@@ -48,6 +48,17 @@ body {
     overflow-x: hidden;
 }
 
+.seller-pickup-location {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.seller-pickup-map {
+    height: 320px;
+    min-height: 240px;
+}
+
 button,
 input,
 select,

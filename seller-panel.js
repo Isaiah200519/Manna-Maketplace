@@ -14,6 +14,7 @@ import { canFulfillCustomizedOrder } from './customization-utils.mjs';
 import { generateLocalListingDraft } from './listing-assistant.mjs';
 import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
 import { watchMaintenanceMode } from './maintenance-mode.js';
+import { createLocationMap, loadLeaflet, normalizeCoordinates } from './location-utils.mjs';
 
 const state = {
     authUser: null,
@@ -101,6 +102,8 @@ let approvalBanner = null;
 let authBootstrapTimer = null;
 let financialPayoutsUnsubscribe = null;
 let platformFeePaymentsUnsubscribe = null;
+let sellerPickupMap = null;
+let sellerPickupMarker = null;
 
 function clearAuthBootstrapTimer() {
     if (authBootstrapTimer) {
@@ -1662,6 +1665,10 @@ function renderAnalytics() {
 function renderProfileForm() {
     const form = document.getElementById('profileForm');
     const profile = state.sellerProfile || {};
+    sellerPickupMap?.remove();
+    sellerPickupMap = null;
+    sellerPickupMarker = null;
+    const savedPickupCoordinates = normalizeCoordinates(profile.storeCoordinates || profile.pickupCoordinates || profile.sellerCoordinates || profile.coordinates);
     const selectedCategory = String(profile.category || '').trim().toLowerCase();
     const categoryOptions = getCategoryOptions().map((category) => `<option value="${escapeHtml(category.name)}" ${selectedCategory === category.id.toLowerCase() || selectedCategory === category.name.toLowerCase() ? 'selected' : ''}>${escapeHtml(category.name)} (${escapeHtml(category.group)})</option>`).join('');
     const availableDeliveryUsers = state.deliveryUsers.filter((user) => user.status === 'approved' && user.isActive !== false);
@@ -1705,7 +1712,16 @@ function renderProfileForm() {
     <label>Instagram URL<input name="instagramUrl" type="url" value="${profile.instagramUrl || ''}" placeholder="https://instagram.com/your-page" /></label>
     <label>YouTube URL<input name="youtubeUrl" type="url" value="${profile.youtubeUrl || ''}" placeholder="https://youtube.com/@your-channel" /></label>
     <label>Email<input name="email" value="${profile.email || state.authUser?.email || ''}" /></label>
-    <label>Address<input name="address" value="${profile.address || ''}" /></label>
+    <label>Address<input name="address" value="${escapeHtml(profile.address || '')}" /></label>
+    <div class="full seller-pickup-location">
+      <div class="panel-card-header"><strong>Store location for admin review</strong><span class="badge">${savedPickupCoordinates ? 'Coordinates saved' : 'Set on map'}</span></div>
+      <p class="muted">Set your store pin for the admin to review. This location is informational only; all customer orders are picked up from the admin-managed Manna Marketplace warehouse.</p>
+      <div class="map-toolbar"><button class="ghost-btn" id="useSellerCurrentLocation" type="button">Use current location</button></div>
+      <div id="sellerPickupMap" class="seller-pickup-map" role="application" aria-label="Choose the seller store location"></div>
+      <div id="sellerPickupMapStatus" class="map-status" aria-live="polite">${savedPickupCoordinates ? `Saved store pin: ${savedPickupCoordinates.latitude.toFixed(5)}, ${savedPickupCoordinates.longitude.toFixed(5)}` : 'Click the map or drag the pin to mark your store.'}</div>
+      <input type="hidden" name="pickupLatitude" value="${savedPickupCoordinates?.latitude ?? ''}" />
+      <input type="hidden" name="pickupLongitude" value="${savedPickupCoordinates?.longitude ?? ''}" />
+    </div>
     <label>City<input name="city" value="${profile.city || ''}" /></label>
     <label>County<input name="county" value="${profile.county || ''}" /></label>
         <label>Seller Category<select name="category" required>
@@ -1774,6 +1790,73 @@ function renderProfileForm() {
     const assignButton = document.getElementById('assignDeliveryPartnerButton');
     if (assignButton) {
         assignButton.addEventListener('click', assignDeliveryPartner);
+    }
+    initializeSellerPickupMap(savedPickupCoordinates);
+}
+
+async function initializeSellerPickupMap(savedCoordinates = null) {
+    const container = document.getElementById('sellerPickupMap');
+    const status = document.getElementById('sellerPickupMapStatus');
+    if (!container) return;
+    try {
+        const L = await loadLeaflet();
+        if (!container.isConnected) return;
+        const initial = savedCoordinates || { latitude: 6.3113, longitude: -10.8014 };
+        sellerPickupMap = L.map(container, { scrollWheelZoom: false }).setView([initial.latitude, initial.longitude], savedCoordinates ? 16 : 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(sellerPickupMap);
+        const setPickupPin = (latitude, longitude) => {
+            const point = normalizeCoordinates({ latitude, longitude });
+            if (!point) return;
+            if (sellerPickupMarker) sellerPickupMarker.setLatLng([point.latitude, point.longitude]);
+            else {
+                sellerPickupMarker = L.marker([point.latitude, point.longitude], { draggable: true }).addTo(sellerPickupMap);
+                sellerPickupMarker.on('dragend', () => {
+                    const location = sellerPickupMarker.getLatLng();
+                    setPickupPin(location.lat, location.lng);
+                });
+            }
+            const latitudeInput = document.querySelector('#profileForm [name="pickupLatitude"]');
+            const longitudeInput = document.querySelector('#profileForm [name="pickupLongitude"]');
+            if (latitudeInput) latitudeInput.value = String(point.latitude);
+            if (longitudeInput) longitudeInput.value = String(point.longitude);
+            sellerPickupMap.panTo([point.latitude, point.longitude]);
+            if (status) status.textContent = `Store pin selected: ${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}. Save your profile for admin review.`;
+        };
+        sellerPickupMap.on('click', (event) => setPickupPin(event.latlng.lat, event.latlng.lng));
+        if (savedCoordinates) {
+            sellerPickupMarker = L.marker([savedCoordinates.latitude, savedCoordinates.longitude], { draggable: true }).addTo(sellerPickupMap);
+            sellerPickupMarker.on('dragend', () => {
+                const location = sellerPickupMarker.getLatLng();
+                setPickupPin(location.lat, location.lng);
+            });
+        }
+        document.getElementById('useSellerCurrentLocation')?.addEventListener('click', () => {
+            if (!navigator.geolocation || !window.isSecureContext) {
+                if (status) status.textContent = 'Current location requires browser location permission and a secure connection.';
+                return;
+            }
+            const button = document.getElementById('useSellerCurrentLocation');
+            if (button) button.disabled = true;
+            navigator.geolocation.getCurrentPosition((position) => {
+                setPickupPin(position.coords.latitude, position.coords.longitude);
+                sellerPickupMap.setZoom(17);
+                if (status) status.textContent = `Current location selected (accuracy ±${Math.round(position.coords.accuracy || 0)} m). Save your profile to keep it.`;
+                if (button) button.disabled = false;
+            }, (error) => {
+                console.warn('[Manna Marketplace] Seller pickup location could not be read:', error);
+                if (status) status.textContent = error.code === error.PERMISSION_DENIED
+                    ? 'Location permission was denied. Click or drag the pin to set the store location.'
+                    : 'Current location is unavailable. Click or drag the pin to set the store location.';
+                if (button) button.disabled = false;
+            }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+        });
+        window.setTimeout(() => sellerPickupMap?.invalidateSize(), 100);
+    } catch (error) {
+        console.error('[Manna Marketplace] Seller pickup map failed to load:', error);
+        if (status) status.textContent = 'Map unavailable. Try again later; saved coordinates are unchanged.';
     }
 }
 
@@ -2527,6 +2610,16 @@ async function saveProfile(event) {
     const facebookUrl = String(data.facebookUrl || '').trim();
     const instagramUrl = String(data.instagramUrl || '').trim();
     const youtubeUrl = String(data.youtubeUrl || '').trim();
+    const rawPickupLatitude = String(data.pickupLatitude || '').trim();
+    const rawPickupLongitude = String(data.pickupLongitude || '').trim();
+    const pickupCoordinates = rawPickupLatitude && rawPickupLongitude
+        ? normalizeCoordinates({ latitude: rawPickupLatitude, longitude: rawPickupLongitude })
+        : null;
+
+    if ((rawPickupLatitude || rawPickupLongitude) && !pickupCoordinates) {
+        createToast('Set a valid pickup location pin before saving.', 'warning');
+        return;
+    }
 
     if (!category) {
         createToast('Please choose a marketplace category for your seller profile.', 'warning');
@@ -2563,6 +2656,8 @@ async function saveProfile(event) {
         acceptedPaymentMethods: state.sellerProfile?.acceptedPaymentMethods || ['mobile_money', 'cash'],
         email: data.email,
         address: data.address,
+        storeCoordinates: pickupCoordinates,
+        pickupCoordinates,
         city,
         county,
         category,
@@ -3269,8 +3364,8 @@ function openCouponModal() {
     document.getElementById('cancelCoupon').addEventListener('click', closeModal);
 }
 
-async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '') {
-    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type });
+async function createNotification(recipientUid, title, message, type = 'system', recipientRole = '', context = {}) {
+    return createRoleNotification(db, recipientUid, recipientRole, { title, message, type, ...context });
 }
 
 async function notifyDeliveryPartnersForOrder(sellerId, sellerName, orderId) {
@@ -3348,7 +3443,7 @@ async function handleOrderAction(action, orderId) {
                 updatedAt: new Date()
             });
             if (currentOrder.customerUid) {
-                await createNotification(currentOrder.customerUid, 'Refund sent for confirmation', `The seller sent ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}. Check your phone or mobile-money account, then confirm receipt for order #${currentOrder.orderNumber || orderId.slice(0, 6)}. Reference: ${paymentReference.trim()}`, 'refund', 'customer');
+                await createNotification(currentOrder.customerUid, 'Refund sent for confirmation', `The seller sent ${formatCurrency(refundAmount)} to ${refundPhone} using ${refundMethod}. Check your phone or mobile-money account, then confirm receipt for order #${currentOrder.orderNumber || orderId.slice(0, 6)}. Reference: ${paymentReference.trim()}`, 'refund', 'customer', { orderId, action: 'confirm_refund' });
             }
             await loadOrders();
             renderOrders();
@@ -3363,7 +3458,7 @@ async function handleOrderAction(action, orderId) {
                 updatedAt: new Date()
             });
             if (currentOrder.customerUid) {
-                await createNotification(currentOrder.customerUid, 'Refund rejected', `Refund for order #${currentOrder.orderNumber || orderId.slice(0, 6)} was rejected by the seller.`, 'refund', 'customer');
+                await createNotification(currentOrder.customerUid, 'Refund rejected', `Refund for order #${currentOrder.orderNumber || orderId.slice(0, 6)} was rejected by the seller.`, 'refund', 'customer', { orderId, action: 'open_order' });
             }
             await loadOrders();
             renderOrders();
@@ -3383,12 +3478,12 @@ async function handleOrderAction(action, orderId) {
     await orderRef.update(orderUpdate);
     if (currentOrder.customerUid) {
         const customerNotifications = {
-            reject: { title: 'Order cancelled', message: 'Your order was cancelled by the seller.', type: 'order' },
-            ready: { title: 'Order ready', message: 'Your order is ready for pickup.', type: 'order' }
+            reject: { title: 'Order cancelled', message: 'Your order was cancelled by the seller.', type: 'order', action: 'open_order' },
+            ready: { title: 'Order ready', message: 'Your order is ready for pickup.', type: 'order', action: 'open_order' }
         };
         const notification = customerNotifications[action];
         if (notification) {
-            await createNotification(currentOrder.customerUid, notification.title, notification.message, notification.type, 'customer');
+            await createNotification(currentOrder.customerUid, notification.title, notification.message, notification.type, 'customer', { orderId, action: notification.action });
         }
     }
     if (nextStatus === 'ready' && currentOrder.sellerId) {

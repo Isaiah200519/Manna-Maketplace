@@ -20,6 +20,7 @@ import { applyCatalogDiscount, getActiveCatalogPriceRule } from './pricing-utils
 import { getReviewProductReferences } from './review-utils.mjs';
 import { applyThemePreference, bindThemePreferenceControl, renderThemePreferenceControl } from './theme-utils.js';
 import { watchMaintenanceMode } from './maintenance-mode.js';
+import { calculateDistanceDeliveryFee, createLocationMap, distanceInKilometers, formatDistance, getMapsDirectionsUrl, getMapsLocationUrl, loadLeaflet, normalizeCoordinates } from './location-utils.mjs';
 
 function getStoredProductPrice(item) {
     const currency = normalizeCurrency(item.currency);
@@ -110,9 +111,13 @@ const state = {
     profileUnsubscribe: null,
     sellersUnsubscribe: null,
     ordersUnsubscribe: null,
+    orderChatUnsubscribe: null,
+    orderChatOrderId: '',
     favoritesUnsubscribe: null,
     addressesUnsubscribe: null,
     locationsUnsubscribe: null,
+    notificationsUnsubscribe: null,
+    helpArticlesUnsubscribe: null,
     cartUnsubscribe: null,
     adminSettingsUnsubscribe: null,
     orderCountdownTimer: null,
@@ -140,8 +145,10 @@ const state = {
     searchQuery: '',
     filters: { category: 'all', sort: 'rating', community: '' },
     orderFilter: 'all',
-    deliveryFee: 60,
-    deliveryOptions: { regularFee: 60, expressFee: 120, regularDays: 3, expressHours: 24 },
+    deliveryFee: 0,
+    deliveryOptions: { regularDays: 3, expressHours: 24 },
+    warehouseLocation: null,
+    distanceDeliveryRatePerKm: null,
     platformPaymentNumbers: { orangeMoneyNumber: '', lonestarMoneyNumber: '' },
     adminWhatsAppNumber: '',
     platformPaymentMethods: {},
@@ -157,6 +164,7 @@ let locationMapLibrariesPromise = null;
 let customerFeedRefreshPromise = null;
 let customerFeedRefreshPending = false;
 let customerHomeFeedDirty = true;
+const customerOrderRouteMaps = new Map();
 
 const authScreen = document.getElementById('authScreen');
 const appShell = document.getElementById('appShell');
@@ -180,8 +188,6 @@ const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 const sidebarClose = document.getElementById('sidebarClose');
 const cartButton = document.getElementById('cartButton');
 const cartCount = document.getElementById('cartCount');
-const navItems = Array.from(document.querySelectorAll('.nav-item[data-section], .mobile-nav-item[data-section]'));
-const mobileNavButtons = Array.from(document.querySelectorAll('.mobile-bottom-nav .mobile-nav-item'));
 const sectionPanels = Array.from(document.querySelectorAll('.section-panel'));
 const pageTitle = document.getElementById('pageTitle');
 const pageSubtitle = document.getElementById('pageSubtitle');
@@ -253,6 +259,7 @@ let locationMarker = null;
 let locationAccuracyCircle = null;
 let locationWatchId = null;
 let locationMapReady = false;
+let locationMapManuallyAdjusted = false;
 let isTrackingLocation = false;
 let locationReverseGeocodeTimer = null;
 
@@ -268,8 +275,16 @@ function normalizeCartState(cart = {}) {
         paymentDetails: cart.paymentDetails || '',
         contactPhone: cart.contactPhone || '',
         notes: cart.notes || '',
-        deliveryFee: Number(cart.deliveryFee || state.deliveryFee || 60),
+        deliveryFee: Number.isFinite(Number(cart.deliveryFee)) ? Number(cart.deliveryFee) : 0,
         selectedLocationId: cart.selectedLocationId || '',
+        deliveryPinSelection: normalizeCoordinates(cart.deliveryPinSelection)
+            ? {
+                ...cart.deliveryPinSelection,
+                ...normalizeCoordinates(cart.deliveryPinSelection),
+                accuracy: Number(cart.deliveryPinSelection.accuracy || 0),
+                source: cart.deliveryPinSelection.source || 'manual'
+            }
+            : null,
         deliveryOption: cart.deliveryOption || 'regular',
         isSignupReward: Boolean(cart.isSignupReward),
         rewardClaimId: String(cart.rewardClaimId || ''),
@@ -1021,9 +1036,6 @@ function bindEvents() {
     if (sidebarBackdrop) {
         sidebarBackdrop.addEventListener('click', () => setMobileNavOpen(false));
     }
-    if (mobileMenuButton) {
-        mobileMenuButton.addEventListener('click', openMobileMenu);
-    }
     if (mobileNavSheet) {
         mobileNavSheet.addEventListener('click', (event) => {
             if (event.target === mobileNavSheet) {
@@ -1038,11 +1050,6 @@ function bindEvents() {
             showSection('notifications');
         });
     }
-    navItems.forEach((button) => button.addEventListener('click', () => showSection(button.dataset.section)));
-    mobileNavButtons.forEach((button) => {
-        if (!button.dataset.section) return;
-        button.addEventListener('click', () => showSection(button.dataset.section));
-    });
     document.getElementById('homeSearch')?.addEventListener('input', (event) => {
         const nextValue = event.target.value.trim();
         state.searchQuery = nextValue.toLowerCase();
@@ -1137,6 +1144,7 @@ function bindEvents() {
 
 function setMobileNavOpen(isOpen) {
     const isMobile = window.innerWidth <= 1023;
+    const shouldOpen = isMobile && isOpen;
 
     if (mobileNavSheet) {
         mobileNavSheet.classList.toggle('open', false);
@@ -1144,19 +1152,25 @@ function setMobileNavOpen(isOpen) {
     }
 
     if (sidebar) {
-        sidebar.classList.toggle('open', isMobile && isOpen);
+        sidebar.classList.toggle('open', shouldOpen);
+        sidebar.setAttribute('aria-hidden', String(isMobile && !shouldOpen));
     }
 
     if (sidebarBackdrop) {
-        sidebarBackdrop.classList.toggle('open', isMobile && isOpen);
+        sidebarBackdrop.classList.toggle('open', shouldOpen);
     }
 
-    document.body.style.overflow = isMobile && isOpen ? 'hidden' : '';
+    sidebarToggle?.setAttribute('aria-expanded', String(shouldOpen));
+    mobileMenuButton?.setAttribute('aria-expanded', String(shouldOpen));
+    document.body.style.overflow = shouldOpen ? 'hidden' : '';
 }
 
 function setActiveNavigation(section) {
     document.querySelectorAll('.nav-item[data-section], .mobile-nav-item[data-section]').forEach((button) => {
-        button.classList.toggle('active', button.getAttribute('data-section') === section);
+        const isCurrent = button.getAttribute('data-section') === section;
+        button.classList.toggle('active', isCurrent);
+        if (isCurrent) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
     });
     // ensure mobile nav contains all main nav items
     (function syncMobileNavItems() {
@@ -1174,15 +1188,6 @@ function setActiveNavigation(section) {
             const label = item.textContent.trim() || section;
             mobileBtn.innerHTML = `<span class="nav-icon">${icon}</span><span>${label}</span>`;
             mobileList.appendChild(mobileBtn);
-        });
-        mobileList.addEventListener('click', (e) => {
-            const btn = e.target.closest('.mobile-nav-item');
-            if (!btn) return;
-            const section = btn.getAttribute('data-section');
-            if (section) {
-                showSection(section);
-                setMobileNavOpen(false);
-            }
         });
         // dedupe mobile items
         const seen = new Set();
@@ -1298,6 +1303,7 @@ async function handleForgotPassword() {
 
 async function handleLogout() {
     clearAuthBootstrapTimer();
+    cleanupListeners();
     try {
         await auth.signOut();
     } catch (error) {
@@ -1381,9 +1387,23 @@ function cleanupListeners() {
     state.signupRewardClaim = null;
     state.signupRewardPromptDismissed = false;
     state.signupRewardRevealShown = false;
-    [state.profileUnsubscribe, state.sellersUnsubscribe, state.ordersUnsubscribe, state.favoritesUnsubscribe, state.addressesUnsubscribe, state.locationsUnsubscribe, state.cartUnsubscribe, state.adminSettingsUnsubscribe].forEach((unsubscribe) => {
+    [
+        state.profileUnsubscribe,
+        state.sellersUnsubscribe,
+        state.ordersUnsubscribe,
+        state.favoritesUnsubscribe,
+        state.addressesUnsubscribe,
+        state.locationsUnsubscribe,
+        state.notificationsUnsubscribe,
+        state.helpArticlesUnsubscribe,
+        state.cartUnsubscribe,
+        state.adminSettingsUnsubscribe,
+        state.orderChatUnsubscribe
+    ].forEach((unsubscribe) => {
         if (unsubscribe) unsubscribe();
     });
+    state.orderChatUnsubscribe = null;
+    state.orderChatOrderId = '';
     if (state.orderCountdownTimer) {
         clearInterval(state.orderCountdownTimer);
         state.orderCountdownTimer = null;
@@ -1394,6 +1414,8 @@ function cleanupListeners() {
     state.favoritesUnsubscribe = null;
     state.addressesUnsubscribe = null;
     state.locationsUnsubscribe = null;
+    state.notificationsUnsubscribe = null;
+    state.helpArticlesUnsubscribe = null;
     state.cartUnsubscribe = null;
     state.adminSettingsUnsubscribe = null;
 }
@@ -1432,7 +1454,22 @@ function setupRealtimeListeners(userId) {
     state.adminSettingsUnsubscribe = db.collection('adminSettings').doc('config').onSnapshot((doc) => {
         const settings = doc.exists ? doc.data() || {} : {};
         const previousAdminWhatsAppNumber = state.adminWhatsAppNumber;
+        const previousWarehouseLocation = JSON.stringify(state.warehouseLocation);
+        const previousDeliveryRate = state.distanceDeliveryRatePerKm;
         state.adminWhatsAppNumber = String(settings.adminWhatsAppNumber || '').trim();
+        const warehouseCoordinates = normalizeCoordinates(settings.warehouseLocation);
+        state.warehouseLocation = warehouseCoordinates
+            ? { ...settings.warehouseLocation, ...warehouseCoordinates }
+            : null;
+        const rawDeliveryRate = Number(settings.distanceDeliveryRatePerKm);
+        state.distanceDeliveryRatePerKm = settings.distanceDeliveryRatePerKm !== null
+            && settings.distanceDeliveryRatePerKm !== undefined
+            && Number.isFinite(rawDeliveryRate)
+            && rawDeliveryRate >= 0
+            ? rawDeliveryRate
+            : null;
+        const distancePricingChanged = previousWarehouseLocation !== JSON.stringify(state.warehouseLocation)
+            || previousDeliveryRate !== state.distanceDeliveryRatePerKm;
         const nextRule = getActiveCatalogPriceRule(settings);
         const ruleChanged = JSON.stringify(nextRule) !== JSON.stringify(state.adminCatalogPriceRule);
         if (state.catalogPriceRuleExpiryTimer) window.clearTimeout(state.catalogPriceRuleExpiryTimer);
@@ -1446,6 +1483,7 @@ function setupRealtimeListeners(userId) {
             }, Math.min(expiresAt - Date.now() + 50, 2147483647));
         }
         if (!ruleChanged) {
+            if (distancePricingChanged && state.activeSection === 'checkout') renderCheckout();
             if (previousAdminWhatsAppNumber !== state.adminWhatsAppNumber && state.activeSection === 'orders') renderOrders();
             return;
         }
@@ -1501,7 +1539,7 @@ function setupRealtimeListeners(userId) {
     }, (error) => {
         console.error('[Manna Marketplace] Customer favorites listener failed:', error);
     });
-    db.collection('notifications').where('recipientUid', '==', userId).orderBy('createdAt', 'desc').onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
+    state.notificationsUnsubscribe = db.collection('notifications').where('recipientUid', '==', userId).orderBy('createdAt', 'desc').onSnapshot({ includeMetadataChanges: true }, (snapshot) => {
         const notifications = snapshot.docs
             .map((doc) => ({ id: doc.id, ...doc.data() }))
             .filter((item) => !item.recipientRole || item.recipientRole === 'customer');
@@ -1517,7 +1555,7 @@ function setupRealtimeListeners(userId) {
     }, (error) => {
         console.error('[Manna Marketplace] Customer notifications listener failed:', error);
     });
-    db.collection('helpArticles').where('targetRoles', 'array-contains', 'customer').onSnapshot((snapshot) => {
+    state.helpArticlesUnsubscribe = db.collection('helpArticles').where('targetRoles', 'array-contains', 'customer').onSnapshot((snapshot) => {
         state.helpArticles = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         if (state.activeSection === 'help') {
             renderHelpArticles();
@@ -1529,7 +1567,9 @@ function setupRealtimeListeners(userId) {
         state.addresses = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         const activeAddress = state.addresses.find((entry) => entry.isActive === true) || state.addresses[0] || null;
         state.activeAddressId = activeAddress?.id || '';
-        state.cart.selectedLocationId = activeAddress?.id || '';
+        if (!state.cart.selectedLocationId && !state.cart.deliveryPinSelection) {
+            state.cart.selectedLocationId = activeAddress?.id || '';
+        }
         saveCartToStorage();
         renderProfileForm();
         if (document.getElementById('checkoutContent')) {
@@ -1607,14 +1647,22 @@ async function loadPlatformSettings() {
         const data = platformSnapshot.exists ? platformSnapshot.data() : {};
         state.adminCatalogPriceRule = getActiveCatalogPriceRule(data);
         state.adminWhatsAppNumber = String(data.adminWhatsAppNumber || '').trim();
+        const warehouseCoordinates = normalizeCoordinates(data.warehouseLocation);
+        state.warehouseLocation = warehouseCoordinates
+            ? { ...data.warehouseLocation, ...warehouseCoordinates }
+            : null;
+        const rawDeliveryRate = Number(data.distanceDeliveryRatePerKm);
+        state.distanceDeliveryRatePerKm = data.distanceDeliveryRatePerKm !== null
+            && data.distanceDeliveryRatePerKm !== undefined
+            && Number.isFinite(rawDeliveryRate)
+            && rawDeliveryRate >= 0
+            ? rawDeliveryRate
+            : null;
         const paymentImage = (value, fallback) => getImageUrl(String(value || '').trim(), fallback);
         state.deliveryOptions = {
-            regularFee: Number(data.regularDeliveryFee || data.deliveryFee || 60),
-            expressFee: Number(data.expressDeliveryFee || 120),
             regularDays: Number(data.regularDeliveryDays || 3),
             expressHours: Number(data.expressDeliveryHours || 24)
         };
-        state.deliveryFee = state.deliveryOptions.regularFee;
         state.platformPaymentNumbers = {
             orangeMoneyNumber: String(data.adminOrangeMoneyNumber || data.orangeMoneyNumber || '').trim(),
             lonestarMoneyNumber: String(data.adminLonestarMoneyNumber || data.lonestarMoneyNumber || '').trim(),
@@ -2117,7 +2165,38 @@ async function openSeller(sellerId) {
     showSection('sellerDetail');
 }
 
+async function initializeCustomerOrderRouteMap(orderId, details) {
+    const container = details.querySelector('[data-customer-route-map]');
+    const order = state.orders.find((entry) => entry.id === orderId);
+    if (!container || !order || customerOrderRouteMaps.has(orderId)) return;
+    const warehouseLocation = normalizeCoordinates(order.warehouseCoordinates || order.warehouseLocation);
+    const customerLocation = normalizeCoordinates(order.deliveryCoordinates || order.deliveryLocation || {
+        latitude: order.deliveryLat,
+        longitude: order.deliveryLng
+    });
+    const locations = [
+        warehouseLocation ? { ...warehouseLocation, label: `Warehouse pickup: ${order.warehouseName || 'Manna Marketplace Warehouse'}` } : null,
+        customerLocation ? { ...customerLocation, label: 'Customer delivery' } : null
+    ].filter(Boolean);
+    if (!locations.length) {
+        container.innerHTML = '<div class="empty-state">Map coordinates are not available for this order yet.</div>';
+        return;
+    }
+    container.textContent = 'Loading map…';
+    try {
+        await loadLeaflet();
+        if (!details.isConnected || !details.open || !container.isConnected) return;
+        const map = createLocationMap(container, locations);
+        customerOrderRouteMaps.set(orderId, map);
+    } catch (error) {
+        console.error('[Manna Marketplace] Customer order route map failed to load:', error);
+        if (container.isConnected) container.textContent = 'Map unavailable. The saved coordinates and Google Maps directions are still available.';
+    }
+}
+
 function renderOrders() {
+    customerOrderRouteMaps.forEach((map) => map.remove());
+    customerOrderRouteMaps.clear();
     const filtered = state.orders.filter((order) => {
         if (order.isDeleted || order.customerDeletedAt) return false;
         if (state.orderFilter === 'active') return ['pending', 'accepted', 'preparing', 'ready', 'picked_up', 'out_for_delivery', 'refund_requested'].includes(order.status);
@@ -2133,15 +2212,57 @@ function renderOrders() {
         const hasRated = Number(order.customerRating || 0) > 0;
         const customizationRequested = isCustomizedOrder(order);
         const customizationFeeStatus = getCustomizationFeeStatus({ ...order, customizationRequested });
+        const orderLabel = order.orderNumber || order.id.slice(0, 6);
+        const deliveryPersonName = String(order.deliveryPersonName || 'Delivery partner');
+        const deliveryPersonPhone = String(order.deliveryPersonPhone || '').trim();
+        const deliveryWhatsAppUrl = deliveryPersonPhone
+            ? getWhatsAppUrl(deliveryPersonPhone, `Hello ${deliveryPersonName}, I am contacting you about order #${orderLabel}.`)
+            : '';
+        const warehouseLocation = normalizeCoordinates(order.warehouseCoordinates || order.warehouseLocation);
+        const customerLocation = normalizeCoordinates(order.deliveryCoordinates || order.deliveryLocation || {
+            latitude: order.deliveryLat,
+            longitude: order.deliveryLng
+        });
+        const routeDistance = warehouseLocation && customerLocation
+            ? distanceInKilometers(warehouseLocation, customerLocation)
+            : null;
+        const directionsUrl = getMapsDirectionsUrl(warehouseLocation, customerLocation);
+        const warehouseMapsUrl = getMapsLocationUrl(warehouseLocation);
+        const customerMapsUrl = getMapsLocationUrl(customerLocation);
         const customizationContactUrl = customizationRequested
             ? getWhatsAppUrl(state.adminWhatsAppNumber, `Hello, I am contacting you about customized order #${order.orderNumber || order.id.slice(0, 6)}. I will send the design image and details here.`)
             : '';
-                return `
+        return `
         <div class="item-card order-session-card ${isArchived ? 'archived-order-card' : ''}">
-    ${order.items?.length ? `<img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" data-full-src="${escapeHtml(getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" loading="${index < 2 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="${escapeHtml(order.items[0]?.name || 'Item')}" />` : ''}
-      <div class="panel-card-header"><strong>#${order.orderNumber || order.id.slice(0, 6)}</strong><span class="badge">${order.status}</span></div>
-      <div class="muted">${formatCurrency(order.total || 0)} • ${order.sellerName || 'Seller'}</div>
-        <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${order.refundStatus || 'none'}</div>
+          <details class="order-card-details" data-order-details="${escapeHtml(order.id)}">
+            <summary class="order-card-summary" aria-label="Show full details for order ${escapeHtml(orderLabel)}">
+              <span class="order-card-summary-content">
+                ${order.items?.length ? `<img src="./images/placeholder.png" data-mobile-loader data-mobile-src="${escapeHtml(getProductThumbnailUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" data-full-src="${escapeHtml(getImageUrl(order.items[0]?.imagePath || order.items[0]?.image || order.items[0]?.imageFilename || ''))}" loading="${index < 2 ? 'eager' : 'lazy'}" fetchpriority="${index === 0 ? 'high' : 'auto'}" decoding="async" alt="" />` : ''}
+                <span class="order-card-summary-text">
+                  <span class="panel-card-header"><strong>#${escapeHtml(orderLabel)}</strong><span class="badge">${escapeHtml(order.status || 'pending')}</span></span>
+                  <span class="muted">${escapeHtml(order.sellerName || 'Seller')} • ${formatCurrency(order.total || 0)} • ${formatDate(order.placedAt || order.createdAt)}</span>
+                  ${order.deliveryPersonUid ? `<span class="muted order-delivery-partner">Delivery partner: ${escapeHtml(deliveryPersonName)}${deliveryPersonPhone ? ` • ${escapeHtml(deliveryPersonPhone)}` : ''}</span>` : ''}
+                </span>
+              </span>
+              <span class="order-card-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="order-card-expanded">
+              <div class="muted">Placed: ${formatDate(order.placedAt || order.createdAt)} • Estimated delivery: ${order.estimatedDeliveryTime ? formatDate(order.estimatedDeliveryTime) : 'Pending'} • Refund: ${escapeHtml(order.refundStatus || 'none')}</div>
+              ${order.deliveryPersonUid ? `<div class="order-delivery-contact"><strong>Delivery partner:</strong> ${escapeHtml(deliveryPersonName)}${deliveryPersonPhone ? ` • <a href="tel:${escapeHtml(deliveryPersonPhone)}">${escapeHtml(deliveryPersonPhone)}</a>` : ''}</div>` : ''}
+              <details class="customer-order-route" data-customer-route-details="${escapeHtml(order.id)}">
+                <summary>Show warehouse pickup and delivery map</summary>
+                <div class="order-route-overview">
+                  <div><strong>Warehouse pickup:</strong> ${escapeHtml(order.warehouseAddress || order.warehouseName || 'Manna Marketplace Warehouse')}${warehouseLocation ? ` <span class="muted">(<a href="${escapeHtml(warehouseMapsUrl)}" target="_blank" rel="noopener noreferrer">${warehouseLocation.latitude.toFixed(5)}, ${warehouseLocation.longitude.toFixed(5)}</a>)</span>` : ' <span class="muted">(warehouse coordinates were not saved with this order)</span>'}</div>
+                  <div><strong>Delivery:</strong> ${escapeHtml(order.deliveryLocation?.address || order.address || order.deliveryLocationLabel || 'Customer location')}${customerLocation ? ` <span class="muted">(<a href="${escapeHtml(customerMapsUrl)}" target="_blank" rel="noopener noreferrer">${customerLocation.latitude.toFixed(5)}, ${customerLocation.longitude.toFixed(5)}</a>)</span>` : ' <span class="muted">(delivery pin not set)</span>'}</div>
+                  <div class="badge">Approximate straight-line distance: ${routeDistance === null ? 'Unavailable' : escapeHtml(formatDistance(routeDistance))}</div>
+                  ${order.orderType === 'signup_blind_box'
+                    ? '<div class="muted">Customer delivery fee: waived for this reward order.</div>'
+                    : `<div class="muted">Distance delivery fee: ${formatCurrency(order.deliveryFee || 0, 'LRD')}${Number.isFinite(Number(order.deliveryRatePerKm)) ? ` (${formatCurrency(order.deliveryRatePerKm, 'LRD')}/km)` : ''}</div>`}
+                  ${directionsUrl ? `<a class="ghost-btn" href="${escapeHtml(directionsUrl)}" target="_blank" rel="noopener noreferrer">Road directions in Google Maps</a>` : ''}
+                </div>
+                <div class="customer-order-route-map" data-customer-route-map="${escapeHtml(order.id)}" role="img" aria-label="Map showing the warehouse pickup and customer delivery locations"></div>
+                <p class="muted">Distance is measured between saved coordinates in a straight line. Use Google Maps for road distance and turn-by-turn directions.</p>
+              </details>
       ${customizationRequested ? `
         <div class="customization-order-panel">
           <div class="panel-card-header"><strong>Customized order</strong><span class="badge">${escapeHtml(customizationFeeStatus.replace(/_/g, ' '))}</span></div>
@@ -2183,6 +2304,13 @@ function renderOrders() {
         ${order.refundStatus === 'approved' && !order.refundConfirmedAt && order.refundPaymentReference ? `<button class="primary-btn" data-confirm-refund="${order.id}">Confirm refund received</button>` : ''}
         ${canDelete ? `<button class="danger-btn" data-delete-order="${order.id}">Delete</button>` : ''}
       </div>
+            </div>
+          </details>
+          ${(isReceived || order.deliveryPersonUid) ? `<div class="order-card-quick-actions">
+            ${isReceived ? `<button class="primary-btn" type="button" data-repeat-order="${escapeHtml(order.id)}">Repeat purchase</button>` : ''}
+            ${order.deliveryPersonUid ? `<button class="ghost-btn" type="button" data-open-delivery-chat="${escapeHtml(order.id)}">Message delivery partner</button>` : ''}
+            ${deliveryWhatsAppUrl ? `<a class="ghost-btn" href="${escapeHtml(deliveryWhatsAppUrl)}" target="_blank" rel="noopener noreferrer">WhatsApp partner</a>` : ''}
+          </div>` : ''}
     </div>`;
     }).join('') : '<div class="empty-state">No orders yet.</div>';
     document.querySelectorAll('[data-track-order]').forEach((button) => button.addEventListener('click', () => trackOrder(button.dataset.trackOrder)));
@@ -2192,7 +2320,13 @@ function renderOrders() {
     document.querySelectorAll('[data-order-received]').forEach((button) => button.addEventListener('click', () => confirmOrderReceived(button.dataset.orderReceived)));
     document.querySelectorAll('[data-confirm-refund]').forEach((button) => button.addEventListener('click', () => confirmRefundReceipt(button.dataset.confirmRefund)));
     document.querySelectorAll('[data-delete-order]').forEach((button) => button.addEventListener('click', () => deleteOrderFromUI(button.dataset.deleteOrder)));
+    document.querySelectorAll('[data-open-delivery-chat]').forEach((button) => button.addEventListener('click', () => openOrderDeliveryChat(button.dataset.openDeliveryChat)));
     document.querySelectorAll('[data-order-customization]').forEach((input) => input.addEventListener('change', () => updateOrderCustomization(input.dataset.orderCustomization, input.checked)));
+    document.querySelectorAll('[data-customer-route-details]').forEach((details) => {
+        details.addEventListener('toggle', () => {
+            if (details.open) initializeCustomerOrderRouteMap(details.dataset.customerRouteDetails, details);
+        });
+    });
     document.querySelectorAll('[data-save-customization-details]').forEach((button) => button.addEventListener('click', () => saveOrderCustomizationDetails(button.dataset.saveCustomizationDetails)));
     document.querySelectorAll('[data-customization-fee-form]').forEach((form) => form.addEventListener('submit', (event) => submitCustomizationFeePayment(event, form.dataset.customizationFeeForm)));
     document.querySelectorAll('[data-pay-customization-fee-wallet]').forEach((button) => button.addEventListener('click', () => payCustomizationFeeFromWallet(button.dataset.payCustomizationFeeWallet, button)));
@@ -2344,6 +2478,9 @@ function formatCountdown(milliseconds) {
 }
 
 function getCountdownState(order, now = Date.now()) {
+    if (['received', 'refunded', 'cancelled'].includes(order.status)) {
+        return { preparation: null, delivery: null, preparationTotal: null, deliveryTotal: null };
+    }
     const placedAt = toOrderDate(order.placedAt || order.createdAt);
     const readyAt = toOrderDate(order.estimatedReadyAt);
     const deliveryAt = toOrderDate(order.estimatedDeliveryTime);
@@ -2550,22 +2687,114 @@ async function confirmOrderReceived(orderId) {
     if (!confirmed) return;
     try {
         await db.collection('orders').doc(orderId).update({ status: 'received', customerReceivedAt: new Date(), sellerPayoutStatus: 'pending', deliveryPayoutStatus: 'pending', updatedAt: new Date() });
+        state.orders = state.orders.map((entry) => entry.id === orderId
+            ? { ...entry, status: 'received', customerReceivedAt: new Date(), sellerPayoutStatus: 'pending', deliveryPayoutStatus: 'pending' }
+            : entry);
+        renderOrders();
+        let sellerNotificationFailed = false;
         if (order.sellerId) {
             const seller = state.sellers.find((entry) => entry.id === order.sellerId);
             if (seller?.ownerUid) {
-                await createRoleNotification(db, seller.ownerUid, 'seller', {
-                    title: 'Order received by customer',
-                    message: `The customer confirmed receipt of order #${order.orderNumber || order.id.slice(0, 6)}.`,
-                    type: 'order'
-                });
+                try {
+                    await createRoleNotification(db, seller.ownerUid, 'seller', {
+                        title: 'Order received by customer',
+                        message: `The customer confirmed receipt of order #${order.orderNumber || order.id.slice(0, 6)}.`,
+                        type: 'order'
+                    });
+                } catch (notificationError) {
+                    sellerNotificationFailed = true;
+                    console.error('[Manna Marketplace] Seller receipt notification failed:', notificationError);
+                }
             }
         }
-        await loadOrders(state.authUser.uid);
-        renderOrders();
-        createToast('Order receipt confirmed.', 'success');
+        createToast(
+            sellerNotificationFailed ? 'Order receipt confirmed, but the seller could not be notified.' : 'Order receipt confirmed.',
+            sellerNotificationFailed ? 'warning' : 'success'
+        );
     } catch (error) {
         createToast(error.message || 'Unable to confirm order receipt.', 'error');
     }
+}
+
+async function openOrderDeliveryChat(orderId) {
+        const order = state.orders.find((entry) => entry.id === orderId);
+        if (!order?.deliveryPersonUid) {
+            createToast('This order does not have an assigned delivery partner yet.', 'warning');
+            return;
+        }
+        openModal(`Message ${order.deliveryPersonName || 'delivery partner'}`, `
+          <p class="muted">Chat for order #${escapeHtml(order.orderNumber || order.id.slice(0, 6))}. Messages are shared with the assigned delivery partner.</p>
+          <div id="customerOrderChatMessages" class="chat-list" aria-live="polite"></div>
+          <form id="customerOrderChatForm" class="chat-form">
+            <label class="sr-only" for="customerOrderChatInput">Message delivery partner</label>
+            <textarea id="customerOrderChatInput" maxlength="1000" required placeholder="Write a message"></textarea>
+            <button class="primary-btn" type="submit">Send message</button>
+          </form>
+        `);
+        state.orderChatOrderId = orderId;
+        state.orderChatUnsubscribe = db.collection('orders').doc(orderId).collection('messages')
+            .orderBy('createdAt', 'asc')
+            .onSnapshot((snapshot) => {
+                if (state.orderChatOrderId !== orderId) return;
+                const container = document.getElementById('customerOrderChatMessages');
+                if (!container) return;
+                const messages = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((message) => !message.isDeleted);
+                container.innerHTML = messages.length ? messages.map((message) => `
+                  <div class="chat-bubble ${message.senderUid === state.authUser?.uid ? 'self' : ''}">
+                    <div class="panel-card-header"><strong>${message.senderUid === state.authUser?.uid ? 'You' : escapeHtml(order.deliveryPersonName || 'Delivery partner')}</strong><span class="badge">${formatDate(message.createdAt)}</span></div>
+                    <div>${escapeHtml(message.text || '')}</div>
+                  </div>
+                `).join('') : '<div class="empty-state">No messages yet. Send a message to start the conversation.</div>';
+                container.scrollTop = container.scrollHeight;
+            }, (error) => {
+                console.error('[Manna Marketplace] Customer order chat listener failed:', error);
+                createToast('Unable to load messages for this order.', 'error');
+            });
+        document.getElementById('customerOrderChatForm')?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            const input = document.getElementById('customerOrderChatInput');
+            const text = input?.value.trim();
+            if (!text || !form || form.dataset.sending === 'true') return;
+            form.dataset.sending = 'true';
+            const sendButton = form.querySelector('button[type="submit"]');
+            if (sendButton) sendButton.disabled = true;
+            try {
+                await db.collection('orders').doc(orderId).collection('messages').add({
+                    text,
+                    senderRole: 'customer',
+                    senderUid: state.authUser.uid,
+                    read: false,
+                    isDeleted: false,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
+                input.value = '';
+                try {
+                    const notification = await createRoleNotification(db, order.deliveryPersonUid, 'delivery_person', {
+                        title: 'New message about an order',
+                        message: `The customer sent a message about order #${order.orderNumber || order.id.slice(0, 6)}.`,
+                        type: 'order',
+                        orderId,
+                        action: 'open_order_chat'
+                    });
+                    if (!notification) {
+                        createToast('Message sent, but the delivery partner could not be notified.', 'warning');
+                        return;
+                    }
+                } catch (notificationError) {
+                    console.error('[Manna Marketplace] Delivery partner message notification failed:', notificationError);
+                    createToast('Message sent, but the delivery partner could not be notified.', 'warning');
+                    return;
+                }
+                createToast('Message sent.', 'success');
+            } catch (error) {
+                createToast(error.message || 'Unable to send your message.', 'error');
+            } finally {
+                form.dataset.sending = 'false';
+                if (sendButton) sendButton.disabled = false;
+            }
+        });
 }
 
 function canRequestRefund(order) {
@@ -2649,6 +2878,84 @@ async function deleteOrderFromUI(orderId) {
     }
 }
 
+function findOrderForNotification(item) {
+    if (item.orderId) {
+        const order = state.orders.find((entry) => entry.id === item.orderId);
+        if (order) return order;
+    }
+    const text = `${item.title || ''} ${item.message || ''}`;
+    return state.orders.find((order) => {
+        const orderNumber = String(order.orderNumber || '').trim();
+        return (orderNumber && text.includes(`#${orderNumber}`))
+            || text.includes(`#${order.id.slice(0, 6)}`);
+    }) || null;
+}
+
+function getNotificationConfirmationAction(item, order) {
+    if (!order) return '';
+    const action = item.action
+        || (item.type === 'refund' ? 'confirm_refund' : '')
+        || (item.type === 'delivery' && order.status === 'delivered' ? 'confirm_order_received' : '');
+    if (action === 'confirm_order_received'
+        && order.status === 'delivered'
+        && (!order.refundStatus || order.refundStatus === 'none')) {
+        return 'confirm_order_received';
+    }
+    if (action === 'confirm_refund'
+        && order.refundStatus === 'approved'
+        && !order.refundConfirmedAt
+        && order.refundPaymentReference) {
+        return 'confirm_refund';
+    }
+    return '';
+}
+
+async function openNotificationOrder(notificationId) {
+    const item = state.notifications.find((entry) => entry.id === notificationId);
+    if (!item) return;
+    const order = findOrderForNotification(item);
+    try {
+        await db.collection('notifications').doc(notificationId).set({ read: true, updatedAt: new Date() }, { merge: true });
+        state.notifications = state.notifications.map((entry) => entry.id === notificationId ? { ...entry, read: true } : entry);
+    } catch (error) {
+        console.error('[Manna Marketplace] Notification read status could not be updated:', error);
+        createToast('Could not mark this notification as read.', 'warning');
+    }
+    if (!order) {
+        showSection('orders');
+        createToast('The related order could not be found in your account.', 'warning');
+        renderNotifications();
+        return;
+    }
+    state.orderFilter = 'all';
+    const orderFilter = document.getElementById('orderFilter');
+    if (orderFilter) orderFilter.value = 'all';
+    showSection('orders');
+    const orderDetails = Array.from(document.querySelectorAll('[data-order-details]'))
+        .find((element) => element.dataset.orderDetails === order.id);
+    if (orderDetails) {
+        orderDetails.open = true;
+        orderDetails.querySelector('summary')?.focus({ preventScroll: true });
+        orderDetails.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    renderNotifications();
+    if (item.action === 'open_order_chat') openOrderDeliveryChat(order.id);
+}
+
+async function handleNotificationConfirmation(notificationId) {
+    const item = state.notifications.find((entry) => entry.id === notificationId);
+    if (!item) return;
+    const order = findOrderForNotification(item);
+    if (!order) {
+        await openNotificationOrder(notificationId);
+        return;
+    }
+    const action = getNotificationConfirmationAction(item, order);
+    await openNotificationOrder(notificationId);
+    if (action === 'confirm_order_received') await confirmOrderReceived(order.id);
+    else if (action === 'confirm_refund') await confirmRefundReceipt(order.id);
+}
+
 function renderNotifications() {
     const visible = state.notifications.filter((item) => !item.isDeleted && (
         item.type !== 'signup_reward'
@@ -2663,6 +2970,9 @@ function renderNotifications() {
         customerNotificationBadgeCount.textContent = unreadCount || '0';
         customerNotificationBadgeCount.classList.toggle('hidden', unreadCount === 0);
     }
+    notificationsToggle?.setAttribute('aria-label', unreadCount
+        ? `Notifications, ${unreadCount} unread`
+        : 'Notifications, all caught up');
     const list = document.getElementById('notificationsList');
     if (!list) return;
     list.innerHTML = `
@@ -2670,25 +2980,40 @@ function renderNotifications() {
         <button class="ghost-btn" data-clear-all-notifications="true" ${visible.length ? '' : 'disabled'}>Clear all</button>
                 ${renderSoundToggle()}
       </div>
-      ${visible.length ? visible.map((item) => `
+      ${visible.length ? visible.map((item) => {
+        const order = findOrderForNotification(item);
+        const confirmationAction = getNotificationConfirmationAction(item, order);
+        const confirmationLabel = confirmationAction === 'confirm_order_received'
+            ? 'Confirm order received'
+            : confirmationAction === 'confirm_refund' ? 'Confirm refund received' : '';
+        return `
         <div class="item-card notification-card ${item.read ? '' : 'unread'}">
           <div class="panel-card-header">
-            <strong>${item.title || 'Update'}</strong>
-            <span class="badge">${item.type || 'system'}</span>
+            <strong>${escapeHtml(item.title || 'Update')}</strong>
+            <span class="badge">${escapeHtml(item.type || 'system')}</span>
           </div>
-          <div class="muted">${item.message || 'You have a new update from Manna Marketplace.'}</div>
+          <div class="muted">${escapeHtml(item.message || 'You have a new update from Manna Marketplace.')}</div>
           <div class="muted">${formatDate(item.createdAt)}</div>
           <div class="modal-actions">
-            <button class="ghost-btn" data-mark-notification="${item.id}">${item.read ? 'Read' : 'Mark as Read'}</button>
-            ${item.type === 'signup_reward' ? `<button class="primary-btn" data-open-reward-notification="${item.id}">Open reward</button>` : ''}
-            <button class="danger-btn" data-delete-notification="${item.id}">Delete</button>
+            <button class="ghost-btn" data-mark-notification="${escapeHtml(item.id)}">${item.read ? 'Read' : 'Mark as Read'}</button>
+            ${order ? `<button class="primary-btn" data-open-notification-order="${escapeHtml(item.id)}">View order</button>` : ''}
+            ${confirmationLabel ? `<button class="primary-btn" data-confirm-notification="${escapeHtml(item.id)}">${confirmationLabel}</button>` : ''}
+            ${item.type === 'signup_reward' ? `<button class="primary-btn" data-open-reward-notification="${escapeHtml(item.id)}">Open reward</button>` : ''}
+            <button class="danger-btn" data-delete-notification="${escapeHtml(item.id)}">Delete</button>
           </div>
-        </div>`).join('') : '<div class="empty-state">No notifications yet.</div>'}`;
+        </div>`;
+      }).join('') : '<div class="empty-state">No notifications yet.</div>'}`;
     list.querySelectorAll('[data-clear-all-notifications]').forEach((button) => {
         button.addEventListener('click', clearAllNotifications);
     });
     list.querySelectorAll('[data-mark-notification]').forEach((button) => {
         button.addEventListener('click', () => markNotificationAsRead(button.dataset.markNotification));
+    });
+    list.querySelectorAll('[data-open-notification-order]').forEach((button) => {
+        button.addEventListener('click', () => openNotificationOrder(button.dataset.openNotificationOrder));
+    });
+    list.querySelectorAll('[data-confirm-notification]').forEach((button) => {
+        button.addEventListener('click', () => handleNotificationConfirmation(button.dataset.confirmNotification));
     });
     list.querySelectorAll('[data-open-reward-notification]').forEach((button) => {
         button.addEventListener('click', () => {
@@ -2789,9 +3114,22 @@ function renderFavorites() {
     document.querySelectorAll('[data-favorite-seller]').forEach((button) => button.addEventListener('click', () => toggleFavoriteSeller(button.dataset.favoriteSeller)));
 }
 
-// Keep the checkout flow tied to the single active delivery address saved for the customer.
+// Resolve either a saved address or a map pin selected from the customer's locations.
 function getActiveAddress() {
     return state.addresses.find((entry) => entry.isActive === true) || state.addresses[0] || null;
+}
+
+function getSelectedDeliveryLocation() {
+    if (state.cart.deliveryPinSelection) {
+        return state.cart.deliveryPinSelection;
+    }
+    const selectedLocationId = state.cart.selectedLocationId || state.activeAddressId || '';
+    return state.addresses.find((address) => address.id === selectedLocationId)
+        || state.locations.find((location) => location.id === selectedLocationId)
+        || getActiveAddress()
+        || state.locations.find((location) => location.isActive === true)
+        || state.locations[0]
+        || null;
 }
 
 function getAddressSummary(address) {
@@ -2808,6 +3146,9 @@ async function setActiveAddress(addressId) {
             batch.update(ref, { isActive: address.id === addressId, updatedAt: new Date() });
         });
         await batch.commit();
+        state.cart.deliveryPinSelection = null;
+        state.cart.selectedLocationId = addressId;
+        saveCartToStorage();
         createToast('Active delivery address updated.', 'success');
     } catch (error) {
         createToast(error.message || 'Unable to update your address.', 'error');
@@ -2931,7 +3272,7 @@ function renderLocationPicker() {
     card.innerHTML = `
     <div class="item-card">
       <div class="panel-card-header">
-        <div><strong>Pick a delivery spot</strong><div class="muted">Use your current position or drag the pin.</div></div>
+        <div><strong>Pick a delivery spot</strong><div class="muted">Use your current position, tap the map, or drag the pin.</div></div>
       </div>
       <div class="map-toolbar">
         <button class="primary-btn" id="useMyLocationButton" type="button">Auto location</button>
@@ -3023,6 +3364,7 @@ function initLocationPickerMap(containerId = 'locationMap', statusElementId = 'l
         locationMarker = null;
         locationAccuracyCircle = null;
     }
+    locationMapManuallyAdjusted = false;
 
     const fallbackLat = defaultLocation.lat;
     const fallbackLng = defaultLocation.lng;
@@ -3067,32 +3409,39 @@ function initLocationPickerMap(containerId = 'locationMap', statusElementId = 'l
 
     locationMarker.on('dragend', async () => {
         stopLiveLocationTracking(false);
+        locationMapManuallyAdjusted = true;
         const latLng = locationMarker.getLatLng();
         locationMap.panTo([latLng.lat, latLng.lng]);
         locationAccuracyCircle.setLatLng([latLng.lat, latLng.lng]);
         locationAccuracyCircle.setRadius(40);
         updateLocationStatus('Pin moved manually. Refining the address…', statusElementId);
-        await maybeReverseGeocode(latLng.lat, latLng.lng, statusElementId, 'manual');
+        setDeliveryPinSelection(latLng.lat, latLng.lng, 40, 'manual');
         state.cart.selectedLocationId = '';
+        await maybeReverseGeocode(latLng.lat, latLng.lng, statusElementId, 'manual');
     });
 
     locationMap.on('click', async (event) => {
         stopLiveLocationTracking(false);
+        locationMapManuallyAdjusted = true;
         const latLng = event.latlng;
         locationMarker.setLatLng(latLng);
         locationAccuracyCircle.setLatLng(latLng);
         locationAccuracyCircle.setRadius(40);
         locationMap.panTo(latLng);
         updateLocationStatus('Pin placed manually. Refining the address…', statusElementId);
+        setDeliveryPinSelection(latLng.lat, latLng.lng, 40, 'manual');
+        state.cart.selectedLocationId = '';
         await maybeReverseGeocode(latLng.lat, latLng.lng, statusElementId, 'manual');
     });
 
     if (navigator.geolocation && window.isSecureContext) {
         navigator.geolocation.getCurrentPosition((position) => {
+            if (locationMapManuallyAdjusted || !locationMap || !locationMarker) return;
             const latLng = { lat: position.coords.latitude, lng: position.coords.longitude };
             applyLocationToMap(latLng.lat, latLng.lng, position.coords.accuracy || 40, `Ready • Accuracy ±${Math.round(position.coords.accuracy || 0)}m`, { zoom: 16, pan: false }, statusElementId);
             locationMapReady = true;
         }, () => {
+            if (locationMapManuallyAdjusted || !locationMap || !locationMarker) return;
             locationMap.setView([fallbackLat, fallbackLng], 13);
             locationMarker.setLatLng([fallbackLat, fallbackLng]);
             locationAccuracyCircle.setLatLng([fallbackLat, fallbackLng]);
@@ -3199,6 +3548,16 @@ function maybeReverseGeocode(lat, lng, statusElementId = 'locationStatus', sourc
             timestamp: new Date().toISOString(),
             source
         };
+        if (state.cart.deliveryPinSelection
+            && Math.abs(state.cart.deliveryPinSelection.latitude - result.latitude) < 0.000001
+            && Math.abs(state.cart.deliveryPinSelection.longitude - result.longitude) < 0.000001) {
+            state.cart.deliveryPinSelection = {
+                ...state.cart.deliveryPinSelection,
+                ...state.checkoutLocationSelection,
+                label: state.cart.deliveryPinSelection.label || 'Delivery pin'
+            };
+            saveCartToStorage();
+        }
         const addressInput = document.getElementById('deliveryAddressInput');
         if (addressInput && result.fullAddress) {
             addressInput.value = result.fullAddress;
@@ -3231,8 +3590,25 @@ function stopLiveLocationTracking(showToast = true) {
         navigator.geolocation.clearWatch(locationWatchId);
     }
     locationWatchId = null;
+    const wasTrackingLocation = isTrackingLocation;
     isTrackingLocation = false;
+    if (wasTrackingLocation) saveCartToStorage();
     if (showToast) createToast('Live tracking stopped.', 'info');
+}
+
+function setDeliveryPinSelection(lat, lng, accuracy, source, persist = true) {
+    const coordinates = normalizeCoordinates({ latitude: lat, longitude: lng });
+    if (!coordinates) return;
+    state.cart.deliveryPinSelection = {
+        ...state.cart.deliveryPinSelection,
+        ...coordinates,
+        accuracy: Number(accuracy) || null,
+        source,
+        label: 'Current location'
+    };
+    state.cart.selectedLocationId = '';
+    if (persist) saveCartToStorage();
+    if (state.activeSection === 'checkout') renderCheckout();
 }
 
 async function handleAutoLocate() {
@@ -3247,6 +3623,7 @@ async function handleAutoLocate() {
         return;
     }
 
+    locationMapManuallyAdjusted = false;
     updateLocationStatus('Finding your location…');
     stopLiveLocationTracking(false);
 
@@ -3254,20 +3631,23 @@ async function handleAutoLocate() {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
         const accuracy = position.coords.accuracy || 40;
-        applyLocationToMap(lat, lng, accuracy, `Tracking live • Accuracy ±${Math.round(accuracy)}m`, { zoom: 16, pan: true });
+        setDeliveryPinSelection(lat, lng, accuracy, 'gps');
+        applyLocationToMap(lat, lng, accuracy, `Delivery pin set • Accuracy ±${Math.round(accuracy)}m`, { zoom: 16, pan: true });
         isTrackingLocation = true;
 
         locationWatchId = navigator.geolocation.watchPosition((nextPosition) => {
             const nextLat = nextPosition.coords.latitude;
             const nextLng = nextPosition.coords.longitude;
             const nextAccuracy = nextPosition.coords.accuracy || 40;
-            applyLocationToMap(nextLat, nextLng, nextAccuracy, `Tracking live • Accuracy ±${Math.round(nextAccuracy)}m`, { zoom: 16, pan: true });
+            setDeliveryPinSelection(nextLat, nextLng, nextAccuracy, 'gps', false);
+            applyLocationToMap(nextLat, nextLng, nextAccuracy, `Delivery pin tracking • Accuracy ±${Math.round(nextAccuracy)}m`, { zoom: 16, pan: true });
         }, () => {
             updateLocationStatus('Live tracking paused. Try again if needed.');
         }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 });
     }, async () => {
         const approx = await tryApproximateNetworkLocation();
         if (approx) {
+            setDeliveryPinSelection(approx.lat, approx.lng, approx.accuracy, 'approximate');
             applyLocationToMap(approx.lat, approx.lng, approx.accuracy, 'Using approximate network location. You can place the pin manually if needed.', { zoom: 13, pan: true });
             createToast('Precise device location was not available; using an approximate network position.', 'info');
         } else {
@@ -3279,10 +3659,19 @@ async function handleAutoLocate() {
 function selectSavedLocation(locationId) {
     const location = state.locations.find((entry) => entry.id === locationId);
     if (!location || !locationMap || !locationMarker) return;
-    const lat = Number(location.lat || 6.3113);
-    const lng = Number(location.lng || -10.8014);
+    const coordinates = normalizeCoordinates(location);
+    if (!coordinates) {
+        createToast('This saved location does not have valid coordinates.', 'warning');
+        return;
+    }
+    const lat = coordinates.latitude;
+    const lng = coordinates.longitude;
     locationMap.setView([lat, lng], 15);
     locationMarker.setLatLng([lat, lng]);
+    locationMapManuallyAdjusted = true;
+    state.cart.deliveryPinSelection = null;
+    state.cart.selectedLocationId = location.id;
+    saveCartToStorage();
     if (document.getElementById('locationLabel')) document.getElementById('locationLabel').value = location.label || 'Home';
     if (document.getElementById('locationLandmark')) document.getElementById('locationLandmark').value = location.landmark || '';
     if (document.getElementById('locationNeighborhood')) document.getElementById('locationNeighborhood').value = location.neighborhood || '';
@@ -3305,17 +3694,37 @@ function clearButtonBusy(button) {
 }
 
 function buildDeliveryLocationPayload(selectedLocation = null) {
-    const lat = Number(selectedLocation?.lat || state.checkoutLocationSelection?.latitude || null);
-    const lng = Number(selectedLocation?.lng || state.checkoutLocationSelection?.longitude || null);
-    const address = selectedLocation?.details || state.checkoutLocationSelection?.fullAddress || state.checkoutLocationSelection?.address || '';
-    const accuracy = Number(state.checkoutLocationSelection?.accuracy || selectedLocation?.accuracy || 0);
+    const coordinates = normalizeCoordinates(selectedLocation?.coordinates)
+        || normalizeCoordinates(selectedLocation)
+        || normalizeCoordinates(state.checkoutLocationSelection);
+    const address = selectedLocation?.details
+        || selectedLocation?.fullAddress
+        || selectedLocation?.address
+        || state.checkoutLocationSelection?.fullAddress
+        || state.checkoutLocationSelection?.address
+        || '';
+    const accuracy = Number(selectedLocation?.accuracy || state.checkoutLocationSelection?.accuracy || 0);
     return {
         address,
-        latitude: Number.isFinite(lat) ? lat : null,
-        longitude: Number.isFinite(lng) ? lng : null,
+        latitude: coordinates?.latitude ?? null,
+        longitude: coordinates?.longitude ?? null,
         accuracy: Number.isFinite(accuracy) ? accuracy : null,
-        source: state.checkoutLocationSelection?.source || (selectedLocation ? 'saved' : 'manual')
+        source: selectedLocation?.source || state.checkoutLocationSelection?.source || (selectedLocation ? 'saved' : 'manual')
     };
+}
+
+function getDistanceDeliveryQuote(selectedLocation = null) {
+    const deliveryLocationPayload = buildDeliveryLocationPayload(selectedLocation);
+    const warehouseCoordinates = normalizeCoordinates(state.warehouseLocation);
+    const customerCoordinates = normalizeCoordinates(deliveryLocationPayload);
+    const rate = state.distanceDeliveryRatePerKm;
+    const distanceKm = warehouseCoordinates && customerCoordinates
+        ? distanceInKilometers(warehouseCoordinates, customerCoordinates)
+        : null;
+    const fee = warehouseCoordinates && customerCoordinates && Number.isFinite(rate) && rate >= 0
+        ? calculateDistanceDeliveryFee(warehouseCoordinates, customerCoordinates, rate)
+        : null;
+    return { warehouseCoordinates, customerCoordinates, distanceKm, rate, fee, deliveryLocationPayload };
 }
 
 async function syncActiveOrderLocation(address, locationPayload = null) {
@@ -3340,7 +3749,11 @@ async function saveCustomerLocation() {
     const neighborhood = document.getElementById('locationNeighborhood')?.value.trim() || '';
     const details = document.getElementById('locationDetails')?.value.trim() || '';
     const position = locationMarker?.getLatLng?.();
-    if (!position) return;
+    if (!position) {
+        createToast('Choose a point on the map before saving this location.', 'warning');
+        clearButtonBusy(button);
+        return;
+    }
 
     try {
         const timestamp = serverTimestamp();
@@ -3369,6 +3782,7 @@ async function saveCustomerLocation() {
             }, { merge: true });
         }
         state.cart.selectedLocationId = savedRef.id;
+        state.cart.deliveryPinSelection = null;
         saveCartToStorage();
         createToast('Location saved successfully.', 'success');
         renderProfileForm();
@@ -3382,16 +3796,32 @@ async function saveCustomerLocation() {
 function renderSettingsForm() {
     const form = document.getElementById('settingsForm');
     form.innerHTML = `
-    <label><input type="checkbox" checked /> Enable notifications</label>
-    ${renderThemePreferenceControl()}
-    <button class="primary-btn" id="changePasswordButton" type="button">Change Password</button>
-  `;
+      <div class="settings-option">
+        <div><strong>Notification sounds</strong><p class="muted">Choose whether new marketplace updates play a sound.</p></div>
+        ${renderSoundToggle()}
+      </div>
+      ${renderThemePreferenceControl()}
+      <button class="primary-btn" id="changePasswordButton" type="button">Send password reset email</button>
+    `;
+    bindSoundToggle(form);
     bindThemePreferenceControl(form, {
         db,
         userId: state.authUser?.uid,
         onError: () => createToast('Theme changed on this device, but could not sync to your account.', 'warning')
     });
-    document.getElementById('changePasswordButton').addEventListener('click', () => createToast('Password reset is available through local storage Auth.', 'info'));
+    document.getElementById('changePasswordButton').addEventListener('click', async () => {
+        const email = resolvePasswordResetEmail();
+        if (!email || !auth) {
+            createToast('A signed-in email address is required to reset your password.', 'warning');
+            return;
+        }
+        try {
+            await auth.sendPasswordResetEmail(email);
+            createToast('Password reset email sent.', 'success');
+        } catch (error) {
+            createToast(error.message || 'Unable to send the password reset email.', 'error');
+        }
+    });
 }
 
 function renderHelpSession() {
@@ -3502,8 +3932,14 @@ function showSection(section) {
     document.body.classList.toggle('customer-home-active', section === 'home');
     setActiveNavigation(section);
     setMobileNavOpen(false);
-    sectionPanels.forEach((panel) => panel.classList.toggle('active', panel.id === `${section}Section`));
-    document.getElementById('walletSection')?.classList.toggle('active', section === 'wallet');
+    sectionPanels.forEach((panel) => {
+        const isActive = panel.id === `${section}Section`;
+        panel.classList.toggle('active', isActive);
+        panel.setAttribute('aria-hidden', String(!isActive));
+    });
+    const walletSection = document.getElementById('walletSection');
+    walletSection?.classList.toggle('active', section === 'wallet');
+    walletSection?.setAttribute('aria-hidden', String(section !== 'wallet'));
     if (section === 'checkout') {
         renderCheckout();
     } else if (section === 'orders') {
@@ -3893,7 +4329,14 @@ function openPaymentModal() {
                 : methodDetails.number;
         const couponApplication = getCouponApplication(items);
         const couponDiscount = couponApplication.valid ? convertCurrency(couponApplication.discountLrd, 'LRD', selectedCurrency) : 0;
-        const total = Math.max(0, items.reduce((sum, entry) => sum + convertCurrency(getCartLineUnitPrice(entry) * entry.quantity, entry.menuItem?.currency, selectedCurrency), 0) - couponDiscount) + convertCurrency(state.cart.deliveryFee || state.deliveryOptions.regularFee, 'LRD', selectedCurrency);
+        const selectedLocation = getSelectedDeliveryLocation();
+        const deliveryQuote = getDistanceDeliveryQuote(selectedLocation);
+        if (!isSignupRewardCart() && deliveryQuote.fee === null) {
+            createToast('Set the warehouse location and delivery rate, then confirm a delivery pin for your address before placing this order.', 'warning');
+            return;
+        }
+        const deliveryFee = isSignupRewardCart() ? 0 : deliveryQuote.fee;
+        const total = Math.max(0, items.reduce((sum, entry) => sum + convertCurrency(getCartLineUnitPrice(entry) * entry.quantity, entry.menuItem?.currency, selectedCurrency), 0) - couponDiscount) + convertCurrency(deliveryFee, 'LRD', selectedCurrency);
         modalTitle.textContent = 'Complete payment';
         modalBody.innerHTML = `
             <form id="paymentModalForm" class="stack">
@@ -3943,12 +4386,32 @@ function renderCheckout() {
     const couponDiscount = couponApplication.valid ? convertCurrency(couponApplication.discountLrd, 'LRD', selectedPaymentCurrency) : 0;
     const subtotal = isSignupReward ? 0 : Math.max(0, items.reduce((sum, entry) => sum + convertCurrency(getCartLineUnitPrice(entry) * entry.quantity, entry.menuItem?.currency, selectedPaymentCurrency), 0) - couponDiscount);
     const selectedDeliveryOption = isSignupReward ? 'regular' : state.cart.deliveryOption || state.customerProfile?.defaultDeliveryOption || 'regular';
-    const deliveryFee = isSignupReward ? 0 : selectedDeliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
-    const total = subtotal + convertCurrency(deliveryFee, 'LRD', selectedPaymentCurrency);
     const seller = state.sellers.find((entry) => entry.id === state.cart.sellerId);
     const activeAddress = getActiveAddress();
+    const selectedLocation = getSelectedDeliveryLocation();
+    const deliveryQuote = getDistanceDeliveryQuote(selectedLocation);
+    const deliveryFee = isSignupReward ? 0 : deliveryQuote.fee;
+    if (placeOrderButton) placeOrderButton.disabled = !isSignupReward && deliveryFee === null;
+    if (deliveryFee !== null) state.cart.deliveryFee = deliveryFee;
+    const total = subtotal + convertCurrency(deliveryFee ?? 0, 'LRD', selectedPaymentCurrency);
     const activeAddressLine = getAddressSummary(activeAddress) || state.customerProfile?.address || 'No active address';
-    const coordinates = activeAddress?.coordinates?.latitude != null && activeAddress?.coordinates?.longitude != null ? `${activeAddress.coordinates.latitude}, ${activeAddress.coordinates.longitude}` : '';
+    const coordinates = deliveryQuote.customerCoordinates
+        ? `${deliveryQuote.customerCoordinates.latitude}, ${deliveryQuote.customerCoordinates.longitude}`
+        : '';
+    const warehouseMapsUrl = getMapsLocationUrl(deliveryQuote.warehouseCoordinates);
+    const deliveryQuoteStatus = isSignupReward
+        ? ''
+        : deliveryQuote.fee === null
+            ? !deliveryQuote.warehouseCoordinates
+                ? 'The admin must set warehouse pickup coordinates before checkout is available.'
+                : state.distanceDeliveryRatePerKm === null
+                    ? 'The admin must set a valid distance delivery rate before checkout is available.'
+                    : 'Save a delivery pin in Profile to calculate the distance fee and continue.'
+            : `${formatDistance(deliveryQuote.distanceKm)} × ${formatCurrency(deliveryQuote.rate, 'LRD')}/km`;
+    if (placeOrderButton) {
+        placeOrderButton.title = deliveryFee === null ? deliveryQuoteStatus : '';
+        placeOrderButton.setAttribute('aria-describedby', deliveryFee === null ? 'deliveryQuoteStatus' : '');
+    }
 
     const paymentNumbers = { ...state.platformPaymentNumbers, loaded: true };
 
@@ -4049,9 +4512,11 @@ function renderCheckout() {
                     ${state.couponsLoaded ? state.coupons.filter((coupon) => (coupon.status || 'active') === 'active' && (!coupon.expiryDate || String(coupon.expiryDate) >= new Date().toISOString().slice(0, 10))).map((coupon) => `<div class="checkout-summary-row"><span><strong>${escapeHtml(coupon.code)}</strong> · ${coupon.type === 'percentage' ? `${Number(coupon.value)}% of seller profit` : `${formatCurrency(Number(coupon.value || 0), 'LRD')} from seller profit`}</span><button class="ghost-btn" type="button" data-use-coupon="${escapeHtml(String(coupon.code || '').toUpperCase())}">Use</button></div>`).join('') : ''}
                     ${couponApplication.valid ? `<div class="muted">Coupon savings: ${formatCurrency(couponDiscount, selectedPaymentCurrency)}</div>` : ''}
                 </div>`}
-            ${isSignupReward ? '<div class="muted">Delivery option: regular only</div>' : `<label>Delivery option<select id="deliveryOptionSelect"><option value="regular" ${selectedDeliveryOption === 'regular' ? 'selected' : ''}>Regular delivery (${state.deliveryOptions.regularDays} days) - ${formatCurrency(state.deliveryOptions.regularFee)}</option><option value="express" ${selectedDeliveryOption === 'express' ? 'selected' : ''}>Express delivery (${state.deliveryOptions.expressHours} hours) - ${formatCurrency(state.deliveryOptions.expressFee)}</option></select></label>
+            ${isSignupReward ? '<div class="muted">Delivery option: regular only</div>' : `<label>Delivery option<select id="deliveryOptionSelect"><option value="regular" ${selectedDeliveryOption === 'regular' ? 'selected' : ''}>Regular delivery (${state.deliveryOptions.regularDays} days)</option><option value="express" ${selectedDeliveryOption === 'express' ? 'selected' : ''}>Express delivery (${state.deliveryOptions.expressHours} hours; distance fee unchanged)</option></select></label>
             <label><input type="checkbox" name="saveDeliveryDefault" ${state.customerProfile?.defaultDeliveryOption === selectedDeliveryOption ? 'checked' : ''} /> Save as my default delivery option</label>`}
-        <p><strong>Delivery fee:</strong> ${formatCurrency(convertCurrency(deliveryFee, 'LRD', selectedPaymentCurrency), selectedPaymentCurrency)}</p>
+        ${deliveryQuoteStatus ? `<div id="deliveryQuoteStatus" class="muted" role="status">${escapeHtml(deliveryQuoteStatus)}${deliveryFee === null && deliveryQuote.warehouseCoordinates && state.distanceDeliveryRatePerKm !== null ? ' <button class="ghost-btn" data-section="profile" type="button">Choose or save delivery pin</button>' : ''}</div>` : ''}
+        ${!isSignupReward && deliveryQuote.warehouseCoordinates ? `<div class="muted"><strong>Only pickup point:</strong> ${escapeHtml(state.warehouseLocation?.name || 'Manna Marketplace Warehouse')} ${warehouseMapsUrl ? `<a href="${escapeHtml(warehouseMapsUrl)}" target="_blank" rel="noopener noreferrer">(${deliveryQuote.warehouseCoordinates.latitude.toFixed(5)}, ${deliveryQuote.warehouseCoordinates.longitude.toFixed(5)}) Open in Google Maps</a>` : ''}</div>` : ''}
+        <p><strong>Delivery fee:</strong> ${deliveryFee === null ? 'Unavailable until the warehouse, rate, and delivery pin are set' : formatCurrency(convertCurrency(deliveryFee, 'LRD', selectedPaymentCurrency), selectedPaymentCurrency)}</p>
         <p><strong>Total to pay:</strong> ${formatCurrency(total, selectedPaymentCurrency)}</p>
         ${seller?.name ? `<div class="muted"><strong>Seller:</strong> ${escapeHtml(seller.name)}</div>` : ''}
         ${seller?.phone ? `<div class="muted">Seller phone: ${escapeHtml(seller.phone)}</div>` : ''}
@@ -4064,7 +4529,7 @@ function renderCheckout() {
         <div class="checkout-address-card">
           <div class="muted">Only your active saved address is displayed here.</div>
           <input class="premium-input" type="text" value="${escapeHtml(activeAddressLine)}" readonly />
-          ${coordinates ? `<input class="premium-input" type="text" value="${escapeHtml(coordinates)}" readonly />` : ''}
+          ${coordinates ? `<a class="muted" href="${escapeHtml(getMapsLocationUrl(deliveryQuote.customerCoordinates))}" target="_blank" rel="noopener noreferrer">Delivery coordinates: ${escapeHtml(coordinates)} · Open in Google Maps</a>` : ''}
         </div>
       </div>
       <form id="checkoutForm" class="stack">
@@ -4171,7 +4636,6 @@ function renderCheckout() {
     });
     document.getElementById('deliveryOptionSelect')?.addEventListener('change', (event) => {
         state.cart.deliveryOption = event.target.value;
-        state.cart.deliveryFee = event.target.value === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
         saveCartToStorage();
         renderCheckout();
     });
@@ -4410,8 +4874,7 @@ async function placeOrder() {
     const savePaymentProcedure = paymentData.get('savePaymentProcedure') === 'on';
     const saveDeliveryDefault = formData.get('saveDeliveryDefault') === 'on';
     const notes = formData.get('notes')?.toString().trim();
-    const selectedLocationId = state.cart.selectedLocationId || state.activeAddressId || '';
-    const selectedLocation = state.addresses.find((address) => address.id === selectedLocationId) || getActiveAddress() || null;
+    const selectedLocation = getSelectedDeliveryLocation();
     const activeAddressLine = getAddressSummary(selectedLocation) || state.customerProfile?.address || '';
     if (!activeAddressLine || !customerPhone || (paymentMethod !== 'balance' && (!paymentPhone || !paymentDetails))) {
         createToast('Please complete your delivery and payment details.', 'error');
@@ -4441,7 +4904,13 @@ async function placeOrder() {
     }, { defaultPrice: 0, sellerMarkup: 0, isSellerOwned: false });
     productPricing.sellerMarkup = Math.max(0, productPricing.sellerMarkup - couponDiscountLrd);
     const deliveryOption = formData.get('deliveryOption')?.toString() || state.cart.deliveryOption || 'regular';
-    const deliveryFee = deliveryOption === 'express' ? state.deliveryOptions.expressFee : state.deliveryOptions.regularFee;
+    const deliveryQuote = getDistanceDeliveryQuote(selectedLocation);
+    if (deliveryQuote.fee === null) {
+        createToast('The order needs a saved warehouse location, delivery rate, and confirmed customer delivery pin.', 'warning');
+        clearButtonBusy(button);
+        return;
+    }
+    const deliveryFee = deliveryQuote.fee;
     const total = subtotal + deliveryFee;
     const paymentCurrency = paymentMethod === 'balance' ? 'LRD' : normalizeCurrency(paymentData.get('paymentCurrency') || state.cart.paymentCurrency || 'LRD');
     const paymentAmount = paymentMethod === 'balance' ? total : convertCurrency(subtotal, 'LRD', paymentCurrency) + convertCurrency(deliveryFee, 'LRD', paymentCurrency);
@@ -4456,13 +4925,26 @@ async function placeOrder() {
     const estimatedDeliveryTime = deliveryOption === 'express'
         ? new Date(placedAt.getTime() + (state.deliveryOptions.expressHours * 60 * 60 * 1000))
         : new Date(placedAt.getTime() + (regularDeliveryDays * 24 * 60 * 60 * 1000));
-    const deliveryLocationPayload = buildDeliveryLocationPayload(selectedLocation);
+    const deliveryLocationPayload = deliveryQuote.deliveryLocationPayload;
+    const savedDeliveryCoordinates = deliveryQuote.customerCoordinates;
+    const warehouseLocation = {
+        name: state.warehouseLocation.name || 'Manna Marketplace Warehouse',
+        address: state.warehouseLocation.address || '',
+        latitude: deliveryQuote.warehouseCoordinates.latitude,
+        longitude: deliveryQuote.warehouseCoordinates.longitude
+    };
     const orderPayload = {
         customerUid: state.authUser.uid,
         customerName: state.customerProfile?.displayName || state.customerProfile?.email || 'Customer',
         customerPhone,
         sellerId: state.cart.sellerId,
         sellerName: state.cart.sellerName || seller?.name || 'Seller',
+        warehouseName: warehouseLocation.name,
+        warehouseAddress: warehouseLocation.address,
+        warehouseCoordinates: { latitude: warehouseLocation.latitude, longitude: warehouseLocation.longitude },
+        warehouseLocation,
+        deliveryDistanceKm: deliveryQuote.distanceKm,
+        deliveryRatePerKm: deliveryQuote.rate,
         sellerMobileMoney: '',
         sellerPaymentReceiver: '',
         sellerAcceptedPaymentMethods: [],
@@ -4483,17 +4965,17 @@ async function placeOrder() {
         address: activeAddressLine,
         deliveryLocationId: selectedLocation?.id || '',
         deliveryLocationLabel: selectedLocation?.label || '',
-        deliveryLat: selectedLocation?.coordinates?.latitude || selectedLocation?.lat || null,
-        deliveryLng: selectedLocation?.coordinates?.longitude || selectedLocation?.lng || null,
+        deliveryLat: savedDeliveryCoordinates?.latitude ?? null,
+        deliveryLng: savedDeliveryCoordinates?.longitude ?? null,
         deliveryLandmark: selectedLocation?.landmark || selectedLocation?.deliveryDetails || '',
         deliveryDetails: selectedLocation?.deliveryDetails || selectedLocation?.details || '',
         deliveryLocationConfirmed: Boolean(selectedLocation),
-        deliveryCoordinates: selectedLocation?.coordinates ? {
-            latitude: selectedLocation.coordinates.latitude,
-            longitude: selectedLocation.coordinates.longitude,
-            accuracy: selectedLocation.accuracy || null,
+        deliveryCoordinates: savedDeliveryCoordinates ? {
+            latitude: savedDeliveryCoordinates.latitude,
+            longitude: savedDeliveryCoordinates.longitude,
+            accuracy: deliveryLocationPayload.accuracy || selectedLocation?.accuracy || null,
             address: activeAddressLine,
-            source: 'saved'
+            source: deliveryLocationPayload.source || 'saved'
         } : null,
         deliveryLocation: deliveryLocationPayload.address || deliveryLocationPayload.latitude || deliveryLocationPayload.longitude ? {
             address: deliveryLocationPayload.address || activeAddressLine,
@@ -4502,9 +4984,9 @@ async function placeOrder() {
             accuracy: deliveryLocationPayload.accuracy,
             source: deliveryLocationPayload.source || 'manual'
         } : null,
-        coordinates: deliveryLocationPayload.latitude !== null && deliveryLocationPayload.longitude !== null ? {
-            latitude: deliveryLocationPayload.latitude,
-            longitude: deliveryLocationPayload.longitude,
+        coordinates: savedDeliveryCoordinates ? {
+            latitude: savedDeliveryCoordinates.latitude,
+            longitude: savedDeliveryCoordinates.longitude,
             accuracy: deliveryLocationPayload.accuracy,
             address: deliveryLocationPayload.address || activeAddressLine,
             source: deliveryLocationPayload.source || 'manual'
@@ -4664,6 +5146,10 @@ function trackOrder(orderId) {
 function repeatOrder(orderId) {
     const order = state.orders.find((entry) => entry.id === orderId);
     if (!order) return;
+    if (!Array.isArray(order.items) || !order.items.length) {
+        createToast('The items for this order are no longer available to repeat.', 'warning');
+        return;
+    }
     state.cart = normalizeCartState({ sellerId: order.sellerId, sellerName: order.sellerName, items: order.items.map((item) => ({ ...item, customizationRequested: false, customizationDetails: '', quantity: item.quantity || 1 })), drink: null, paymentMethod: 'orange_money', paymentPhone: '', paymentDetails: '', contactPhone: '', notes: '', deliveryFee: state.deliveryFee, selectedLocationId: order.deliveryLocationId || '', sellerPaymentReceiver: order.sellerPaymentReceiver || order.sellerMobileMoney || '', sellerAcceptedPaymentMethods: Array.isArray(order.sellerAcceptedPaymentMethods) ? order.sellerAcceptedPaymentMethods : [] });
     saveCartToStorage();
     updateCartSummary();
@@ -4771,6 +5257,9 @@ function handleModalEscape(event) {
 }
 
 function openModal(title, body) {
+    state.orderChatUnsubscribe?.();
+    state.orderChatUnsubscribe = null;
+    state.orderChatOrderId = '';
     modalTitle.textContent = title;
     modalBody.innerHTML = body;
     modalActions.innerHTML = '<button class="ghost-btn" id="closeModalBtn">Close</button>';
@@ -4781,6 +5270,9 @@ function openModal(title, body) {
 }
 
 function closeModal() {
+    state.orderChatUnsubscribe?.();
+    state.orderChatUnsubscribe = null;
+    state.orderChatOrderId = '';
     modalBackdrop.classList.add('hidden');
     modalBody.innerHTML = '';
     modalActions.innerHTML = '';

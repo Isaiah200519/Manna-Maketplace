@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v22-network-first-app-shell';
+const CACHE_NAME = 'manna-static-v25-firestore-connection-resilience';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',
@@ -62,9 +62,6 @@ self.addEventListener('fetch', (event) => {
         || event.request.mode === 'navigate'
         || /\.(?:html|js|mjs|css|svg|png|jpe?g|webp|ico|woff2?)$/i.test(requestUrl.pathname);
     if (!isStaticAsset) return;
-    const isNetworkFirst = event.request.mode === 'navigate'
-        || /\.(?:html|js|mjs|css)$/i.test(requestUrl.pathname)
-        || isTrustedExternalScript;
 
     const cacheRequest = async (cache, response) => {
         if ((response.type === 'opaque' && !isTrustedExternalScript)
@@ -81,17 +78,12 @@ self.addEventListener('fetch', (event) => {
     };
 
     event.respondWith(caches.open(CACHE_NAME).then(async (cache) => {
-        if (!isNetworkFirst) {
-            const cachedResponse = await cache.match(event.request);
-            if (cachedResponse) return cachedResponse;
-        }
-
+        const cachedResponse = await cache.match(event.request);
+        if (cachedResponse) return cachedResponse;
         try {
             return await fetch(event.request).then((response) => cacheRequest(cache, response));
         } catch (error) {
             console.warn('[Manna Marketplace] Static asset request failed:', error);
-            const cachedResponse = await cache.match(event.request);
-            if (cachedResponse) return cachedResponse;
             if (event.request.mode === 'navigate') {
                 const appShell = await cache.match('./index.html');
                 if (appShell) return appShell;

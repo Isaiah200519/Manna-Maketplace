@@ -21,6 +21,7 @@ if (window.firebase) {
         auth: window.firebase.auth(firebaseApp),
         db: window.firebase.firestore(firebaseApp)
     };
+    firebaseServices.db.settings({ experimentalAutoDetectLongPolling: true, merge: true });
 } else {
     console.error('[Manna Marketplace] Firebase SDK is unavailable. Firestore mode cannot start.');
 }

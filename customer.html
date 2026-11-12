@@ -8,16 +8,18 @@
     <title>Manna Marketplace Customer • Marketplace</title>
     <meta name="description"
         content="Browse Liberia's premium sellers and order delivery from the Manna Marketplace customer marketplace." />
+    <meta name="robots" content="noindex, nofollow" />
     <link rel="shortcut icon" href="./favicon.ico" type="image/x-icon" />
     <link rel="icon" href="./images/logo/marketplace-logo.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./images/logo/marketplace-logo.svg" />
     <link rel="manifest" href="./manifest.json" />
-    <link rel="stylesheet" href="./style.css?v=2" />
-    <link rel="stylesheet" href="./customer.css?v=6" />
+    <link rel="stylesheet" href="./style.css?v=3" />
+    <link rel="stylesheet" href="./customer.css?v=9" />
     <link rel="stylesheet" href="./theme.css?v=2" />
 </head>
 
 <body class="panel-page customer-panel">
+    <a class="skip-link" href="#customerMain">Skip to main content</a>
     <div id="onboardingOverlay" class="onboarding-overlay hidden" aria-hidden="true">
         <div class="onboarding-card">
             <h2>Welcome to Manna Marketplace</h2>
@@ -136,7 +138,7 @@
             </div>
         </aside>
 
-        <main class="main-panel">
+        <main class="main-panel" id="customerMain" tabindex="-1">
             <header class="topbar">
                 <div class="topbar-mobile-brand">
                     <div class="brand-block">
@@ -320,7 +322,7 @@
                         <h3>Checkout</h3>
                         <div class="modal-actions">
                             <button id="removeCheckoutHeaderButton" class="danger-btn" type="button">Remove</button>
-                            <button id="placeOrderButton" class="primary-btn">Continue to payment</button>
+                            <button id="placeOrderButton" class="primary-btn" type="button">Continue to payment</button>
                         </div>
                     </div>
                     <div id="checkoutContent" class="stack"></div>
@@ -341,7 +343,7 @@
         </div>
     </div>
 
-    <div class="mobile-bottom-nav" id="mobileBottomNav">
+    <div class="mobile-bottom-nav" id="mobileBottomNav" role="navigation" aria-label="Primary navigation">
         <button class="mobile-nav-item active" data-section="home" aria-label="Home"><svg viewBox="0 0 24 24"
                 fill="none" stroke="currentColor" stroke-width="1.8">
                 <path d="M4 10.5L12 4l8 6.5" />
@@ -377,7 +379,7 @@
     <script defer src="./image-preview.js"></script>
     <script defer src="./image-loader.js"></script>
     <script defer src="./pwa-install.js"></script>
-    <script type="module" src="./customer-panel.js?v=7"></script>
+    <script type="module" src="./customer-panel.js?v=12"></script>
     <script defer src="./password-toggle.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
