@@ -1,6 +1,8 @@
 import { createToast } from './utils.js';
 
 const MANNA_MARKETPLACE_PLATFORM_URL = 'https://manna-marketplace.netlify.app/customer';
+const QR_CODE_LIBRARY_URL = 'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js';
+let qrCodeLibraryPromise = null;
 
 export function getQRCardHTML(containerId = 'mannaQrContainer', cardId = 'mannaQrCard') {
     return `
@@ -29,69 +31,74 @@ export function getQRCardHTML(containerId = 'mannaQrContainer', cardId = 'mannaQ
   `;
 }
 
-function drawFallbackQRCode(canvas, url) {
-    const context = canvas.getContext('2d');
-    if (!context) return;
+function loadQRCodeLibrary() {
+    if (window.QRCode) return Promise.resolve();
+    if (qrCodeLibraryPromise) return qrCodeLibraryPromise;
 
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#1e1e1e';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#F97316';
-    context.fillRect(24, 24, 208, 208);
-    context.fillStyle = '#1e1e1e';
-    context.fillRect(40, 40, 176, 176);
-    context.fillStyle = '#F97316';
-    context.fillRect(56, 56, 144, 144);
-    context.fillStyle = '#1e1e1e';
-    context.fillRect(72, 72, 112, 112);
-    context.fillStyle = '#F97316';
-    context.fillRect(88, 88, 80, 80);
+    qrCodeLibraryPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = QR_CODE_LIBRARY_URL;
+        script.async = true;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('QR code library failed to load.'));
+        document.head.appendChild(script);
+    }).catch((error) => {
+        qrCodeLibraryPromise = null;
+        throw error;
+    });
 
-    context.fillStyle = '#ffffff';
-    context.font = '14px Inter, sans-serif';
-    context.textAlign = 'center';
-    context.fillText('Manna Marketplace', canvas.width / 2, canvas.height - 20);
-    context.font = '12px Inter, sans-serif';
-    context.fillText(url.replace('https://', ''), canvas.width / 2, canvas.height - 4);
+    return qrCodeLibraryPromise;
+}
+
+async function renderQRCode(container, url) {
+    try {
+        await loadQRCodeLibrary();
+        if (!container.isConnected) return;
+        if (!window.QRCode) throw new Error('QR code library did not initialize.');
+
+        new window.QRCode(container, {
+            text: url,
+            width: 256,
+            height: 256,
+            colorDark: '#F97316',
+            colorLight: '#1e1e1e',
+            correctLevel: window.QRCode.CorrectLevel.H
+        });
+        container.dataset.qrState = 'ready';
+    } catch (error) {
+        console.error('[Manna Marketplace] QR code generation failed:', error);
+        const message = document.createElement('p');
+        message.setAttribute('role', 'status');
+        message.textContent = 'QR code could not be loaded. Check your connection and try again.';
+        container.replaceChildren(message);
+        container.dataset.qrState = 'failed';
+    }
 }
 
 export function initQRCode(containerId, url = MANNA_MARKETPLACE_PLATFORM_URL) {
     const container = document.getElementById(containerId);
     if (!container) return null;
 
-    if (container.dataset.qrInitialized === 'true') {
+    if (container.dataset.qrState === 'ready') {
         return container.querySelector('canvas, img');
     }
+    if (container.dataset.qrState) return null;
+    container.dataset.qrState = 'pending';
 
-    container.innerHTML = '';
+    const observer = 'IntersectionObserver' in window
+        ? new IntersectionObserver((entries) => {
+            if (!entries.some((entry) => entry.isIntersecting)) return;
+            observer.disconnect();
+            renderQRCode(container, url);
+        }, { rootMargin: '100px' })
+        : null;
 
-    if (typeof window !== 'undefined' && window.QRCode) {
-        try {
-            new window.QRCode(container, {
-                text: url,
-                width: 256,
-                height: 256,
-                colorDark: '#F97316',
-                colorLight: '#1e1e1e',
-                correctLevel: window.QRCode.CorrectLevel.H
-            });
-            container.dataset.qrInitialized = 'true';
-            return container.querySelector('canvas, img');
-        } catch (error) {
-            console.warn('[Manna Marketplace] QR code generation failed, using fallback renderer.', error);
-        }
+    if (observer) {
+        observer.observe(container);
+    } else {
+        renderQRCode(container, url);
     }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    canvas.style.display = 'block';
-    canvas.style.margin = '0 auto';
-    container.appendChild(canvas);
-
-    drawFallbackQRCode(canvas, url);
-    container.dataset.qrInitialized = 'true';
-    return canvas;
+    return null;
 }
 
 export function downloadQR(containerId, filename = 'manna-qr.png') {

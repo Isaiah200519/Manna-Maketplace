@@ -1,4 +1,4 @@
-const CACHE_NAME = 'manna-static-v29-marketplace';
+const CACHE_NAME = 'manna-static-v30-lazy-qr';
 const ASSETS_TO_CACHE = [
     '/',
     './index.html',
